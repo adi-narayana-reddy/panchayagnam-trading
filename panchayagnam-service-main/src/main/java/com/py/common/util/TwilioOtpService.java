@@ -134,7 +134,7 @@ public class TwilioOtpService {
             throw new RuntimeException(mapTwilioError(e.getCode(), e.getMessage()));
         } catch (Exception e) {
             logger.error("Unexpected error sending custom OTP SMS to {}", maskPhoneNumber(formatted), e);
-            throw new RuntimeException("Failed to send OTP SMS: " + e.getMessage());
+            throw new RuntimeException("Unable to deliver OTP at this time. Please try again later.");
         }
     }
 
@@ -185,7 +185,7 @@ public class TwilioOtpService {
             case 21614 -> "Destination number cannot receive SMS text messages.";
             case 20003 -> "SMS gateway authentication error. Please contact administrator.";
             case 20429 -> "Too many SMS requests sent to carrier. Please try again in a few minutes.";
-            default -> "SMS provider error (" + code + "): " + (defaultMsg != null ? defaultMsg : "Delivery failed");
+            default -> "SMS provider delivery failure (Error " + code + "). Please contact support if this persists.";
         };
     }
 
