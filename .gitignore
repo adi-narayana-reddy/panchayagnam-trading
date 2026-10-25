@@ -1,0 +1,35 @@
+# Panchayagnam Root .gitignore
+
+# Backups and temporary files
+_backup_before_stage1/
+*.zip
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
+
+# Secrets & Environment configuration (KEEP OUT OF GIT)
+*.env
+!.env.example
+
+# Java / Maven build output
+**/target/
+**/.mvn/
+**/pom.xml.tag
+**/pom.xml.releaseBackup
+**/pom.xml.versionsBackup
+**/*.jar
+**/*.war
+
+# Flutter / Dart build output
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.pub-cache/
+**/.pub/
+
+# IDE files
+**/.idea/
+**/.vscode/
+**/*.iml

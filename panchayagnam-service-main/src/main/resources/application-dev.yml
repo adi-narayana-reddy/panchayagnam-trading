@@ -1,0 +1,15 @@
+spring:
+  datasource:
+    url: ${DEV_DB_URL:jdbc:mysql://localhost:3306/py_dev?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${DEV_DB_USERNAME:root}
+    password: ${DEV_DB_PASSWORD:admin}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+
+trading:
+  paper-trading:
+    enabled: ${PAPER_TRADING_ENABLED:true}

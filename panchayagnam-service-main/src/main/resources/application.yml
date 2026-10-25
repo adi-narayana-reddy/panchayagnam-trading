@@ -1,0 +1,56 @@
+spring:
+  application:
+    name: panchayagnam-service
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:local}
+  banner:
+    location: classpath:banner.txt
+  mail:
+    host: ${SPRING_MAIL_HOST:smtpout.secureserver.net}
+    port: ${SPRING_MAIL_PORT:465}
+    username: ${SPRING_MAIL_USERNAME:customersupport@panchayagnam.com}
+    password: ${SPRING_MAIL_PASSWORD:}
+    protocol: ${SPRING_MAIL_PROTOCOL:smtps}
+    properties:
+      mail:
+        smtp:
+          auth: ${SPRING_MAIL_SMTP_AUTH:true}
+          ssl:
+            enable: ${SPRING_MAIL_SSL_ENABLE:true}
+logging:
+  config: classpath:log4j2.xml
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /panchayagnam
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
+    doc-expansion: none
+
+jwt:
+  secret: ${JWT_SECRET:panchayagnam_secret_key_2024_super_secure_key_256bit}
+  expiration-ms: ${JWT_EXPIRATION_MS:86400000}
+
+smartapi:
+  key: ${SMARTAPI_KEY:default_smartapi_key}
+
+twilio:
+  account-sid: ${TWILIO_ACCOUNT_SID:dummy_account_sid}
+  api-key-sid: ${TWILIO_API_KEY_SID:dummy_api_key_sid}
+  api-secret: ${TWILIO_API_SECRET:dummy_api_secret}
+  service-sid: ${TWILIO_SERVICE_SID:dummy_service_sid}
+  otp-expiry-minutes: ${TWILIO_OTP_EXPIRY_MINUTES:5}
+  from-number: ${TWILIO_FROM_NUMBER:+1234567890}
+  enabled: ${TWILIO_ENABLED:false}
+
+app:
+  mail:
+    from: ${APP_MAIL_FROM:customersupport@panchayagnam.com}
+    alert-to: ${APP_MAIL_ALERT_TO:admin@panchayagnam.com}
+
+trading:
+  paper-trading:
+    enabled: ${PAPER_TRADING_ENABLED:true}

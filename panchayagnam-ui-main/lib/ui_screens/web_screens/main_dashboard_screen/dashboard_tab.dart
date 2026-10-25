@@ -1,0 +1,3892 @@
+import 'dart:async';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:intl/intl.dart';
+import 'package:lottie/lottie.dart';
+import '../../../bloc/broker_fetch_balance_bloc/fetch_account_balance_bloc.dart';
+import '../../../bloc/dashboard_count_bloc/count_bloc.dart';
+import '../../../bloc/dashboard_count_bloc/count_event.dart';
+import '../../../bloc/dashboard_count_bloc/count_state.dart';
+import '../../../bloc/fetch_user_demat_bloc/fetch_user_demat_bloc.dart';
+import '../../../bloc/hot_stock_bloc/hot_stock_block.dart';
+import '../../../bloc/hot_stock_bloc/hot_stock_event.dart';
+import '../../../bloc/hot_stock_bloc/hot_stock_state.dart';
+import '../../../bloc/individual_bloc/individual_execution_bloc.dart';
+import '../../../constants/colors.dart';
+import '../../../models/hot_stock_model.dart';
+import '../../../models/ScripInfo.dart';
+import 'dart:html' as html;
+import '../../../reusable_widets/order_panel_widget.dart';
+
+enum UserRole { SUPER_ADMIN, ADMIN, USER }
+
+extension UserRoleX on UserRole {
+  static UserRole fromString(String? role) {
+    switch (role?.toUpperCase()) {
+      case 'SUPER_ADMIN':
+        return UserRole.SUPER_ADMIN;
+      case 'ADMIN':
+        return UserRole.ADMIN;
+      default:
+        return UserRole.USER;
+    }
+  }
+}
+
+class DashboardTab extends StatefulWidget {
+  final UserRole userRole;
+  final int accId;
+  final double availableMargin;
+
+  const DashboardTab({
+    super.key,
+    required this.userRole,
+    this.accId = 0,
+    this.availableMargin = 0.0,
+  });
+
+  bool get isSuperAdmin => userRole == UserRole.SUPER_ADMIN;
+  bool get isAdmin => userRole == UserRole.ADMIN;
+
+  @override
+  State<DashboardTab> createState() => _DashboardTabState();
+}
+
+class _DashboardTabState extends State<DashboardTab> {
+  int? pyId = int.tryParse(html.window.sessionStorage['user_id'] ?? '');
+  int _carouselIndex = 0;
+  late PageController _pageController;
+  Timer? _carouselTimer;
+  bool _isToday(String dateStr) {
+    try {
+      final parsed = DateFormat('yyyy-MM-dd').parse(dateStr);
+      final now = DateTime.now();
+      return parsed.year == now.year &&
+          parsed.month == now.month &&
+          parsed.day == now.day;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  List<Map<String, dynamic>> _activeAccounts = [];
+
+  // ── Balance fetch tracking ────────────────────────────────────────────────
+  final Map<int, _PendingTrade> _pendingTrades = {};
+  final Set<int> _loadingBalanceIds = {};
+  final Map<int, double> _fetchedBalances = {};
+
+  static const _slides = [
+    _Slide(
+      gradient: [Color(0xFF7C3AED), Color(0xFF9333EA)],
+      title: 'Smart Signals. Better Trades.',
+      subtitle: 'Real-time buy/sell alerts across NSE & BSE.',
+      tag: 'NEW',
+      icon: Icons.auto_awesome_rounded,
+    ),
+    _Slide(
+      gradient: [Color(0xFF1D4ED8), Color(0xFF7C3AED)],
+      title: 'Multi-Broker Execution in One Click',
+      subtitle: 'Place orders across Angel One, Motilal & more instantly.',
+      tag: 'PRO',
+      icon: Icons.flash_on_rounded,
+    ),
+    _Slide(
+      gradient: [Color(0xFF0F766E), Color(0xFF1D4ED8)],
+      title: 'Group Orders Now 3× Faster',
+      subtitle: '500+ orders per second with zero slippage.',
+      tag: 'UPDATE',
+      icon: Icons.speed_rounded,
+    ),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    _pageController = PageController();
+
+    if (pyId != null) {
+      context.read<DashboardStatsBloc>().add(FetchDashboardStatsEvent(pyId!));
+      context.read<FetchUserDematBloc>().add(LoadUserDematAccounts(pyId!));
+    }
+
+    _carouselTimer = Timer.periodic(const Duration(seconds: 4), (_) {
+      if (!mounted) return;
+      final next = (_carouselIndex + 1) % _slides.length;
+      _pageController.animateToPage(
+        next,
+        duration: const Duration(milliseconds: 500),
+        curve: Curves.easeInOut,
+      );
+    });
+  }
+
+  @override
+  void dispose() {
+    _carouselTimer?.cancel();
+    _pageController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickDate(BuildContext context, String currentDate) async {
+    final initial = DateFormat('yyyy-MM-dd').parse(currentDate);
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: initial,
+      firstDate: DateTime(2023),
+      lastDate: DateTime.now(),
+      builder: (ctx, child) => Theme(
+        data: Theme.of(ctx).copyWith(
+          colorScheme: const ColorScheme.light(
+            primary: Color(0xFF7C3AED),
+            onPrimary: Colors.white,
+          ),
+        ),
+        child: child!,
+      ),
+    );
+    if (picked != null && context.mounted) {
+      context.read<HotStockBloc>().add(
+        ChangeDateEvent(DateFormat('yyyy-MM-dd').format(picked)),
+      );
+    }
+  }
+
+  void _requestBalanceThenOpenPanel({
+    required HotStockModel stock,
+    required String side,
+    required Map<String, dynamic> account,
+    LtpData? ltpData,
+  }) {
+    final int accountId = account['id'] as int? ?? 0;
+
+    if (_loadingBalanceIds.contains(accountId)) return;
+
+    setState(() {
+      _loadingBalanceIds.add(accountId);
+      _pendingTrades[accountId] = _PendingTrade(
+        stock: stock,
+        side: side,
+        account: account,
+        ltpData: ltpData,
+      );
+    });
+
+    context.read<FetchAccountBalanceBloc>().add(LoadAccountBalance(accountId));
+  }
+
+  void _openOrderPanelWithBalance({
+    required HotStockModel stock,
+    required String side,
+    required Map<String, dynamic> account,
+    required double availableMargin,
+    LtpData? ltpData,
+  }) {
+    if (!mounted) return;
+
+    final scrip = ScripInfo(
+      tradingSymbol: stock.companyName,
+      exchange: 'NSE',
+      symbolToken: stock.symbolToken ?? '',
+    );
+
+    final int selectedAccId = account['id'] as int? ?? 0;
+
+    final ltpDataResolved =
+        ltpData ??
+        LtpData(
+          ltp: stock.price,
+          open: stock.price,
+          high: stock.price,
+          low: stock.price,
+          close: stock.price,
+          change: stock.changePercent ?? 0.0,
+          percentChange: stock.changePercent ?? 0.0,
+        );
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: context.read<IndividualExecutionBloc>()),
+        ],
+        child: Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(context).viewInsets.bottom,
+          ),
+          child: OrderPanelWidget(
+            scrip: scrip,
+            ltpData: ltpDataResolved,
+            side: side,
+            accId: selectedAccId,
+            availableMargin: availableMargin,
+          ),
+        ),
+      ),
+    );
+  }
+
+  double _parseMargin(String raw) {
+    final cleaned = raw.replaceAll('₹', '').replaceAll(',', '').trim();
+    return double.tryParse(cleaned) ?? 0.0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return MultiBlocListener(
+      listeners: [
+        // ── FetchUserDemat ─────────────────────────────────────────────────
+        BlocListener<FetchUserDematBloc, FetchUserDematState>(
+          listener: (context, state) {
+            if (state is FetchUserDematLoaded) {
+              final accounts = state.accounts
+                  .map((item) {
+                    return <String, dynamic>{
+                      'id': item.id,
+                      'name': item.userName,
+                      'clientCode': item.clientId,
+                      'broker': item.brokerType,
+                      'portfolioValue':
+                          '₹ ${item.availableCash.toStringAsFixed(2)}',
+                      'status': item.active ? 'ACTIVE' : 'INACTIVE',
+                      'isOwn': item.isOwnAccount ?? false,
+                    };
+                  })
+                  .where((a) => a['status'] == 'ACTIVE')
+                  .toList();
+
+              accounts.sort((a, b) {
+                final aOwn = a['isOwn'] == true ? 0 : 1;
+                final bOwn = b['isOwn'] == true ? 0 : 1;
+                return aOwn.compareTo(bOwn);
+              });
+
+              setState(() => _activeAccounts = accounts);
+            }
+          },
+        ),
+
+        // ── FetchAccountBalance ────────────────────────────────────────────
+        BlocListener<FetchAccountBalanceBloc, FetchAccountBalanceState>(
+          listener: (context, state) {
+            if (state is FetchAccountBalanceLoaded) {
+              final int accountId = state.pyBrokerId;
+              final double balance = state.availableCash;
+
+              setState(() {
+                _loadingBalanceIds.remove(accountId);
+                _fetchedBalances[accountId] = balance;
+              });
+
+              final pending = _pendingTrades.remove(accountId);
+              if (pending != null) {
+                _openOrderPanelWithBalance(
+                  stock: pending.stock,
+                  side: pending.side,
+                  account: pending.account,
+                  availableMargin: balance,
+                  ltpData: pending.ltpData,
+                );
+              }
+            } else if (state is FetchAccountBalanceError) {
+              final int accountId = state.pyBrokerId;
+
+              setState(() => _loadingBalanceIds.remove(accountId));
+
+              final pending = _pendingTrades.remove(accountId);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Could not fetch balance: ${state.message}. Opening panel with ₹0.',
+                  ),
+                  backgroundColor: const Color(0xFFEF4444),
+                  behavior: SnackBarBehavior.floating,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                ),
+              );
+
+              if (pending != null) {
+                _openOrderPanelWithBalance(
+                  stock: pending.stock,
+                  side: pending.side,
+                  account: pending.account,
+                  availableMargin: 0.0,
+                  ltpData: pending.ltpData,
+                );
+              }
+            }
+          },
+        ),
+
+        // ── HotStockBloc operation feedback ───────────────────────────────
+        BlocListener<HotStockBloc, HotStockState>(
+          listenWhen: (prev, curr) =>
+              curr.operationStatus != prev.operationStatus &&
+              curr.operationStatus != OperationStatus.idle &&
+              curr.operationStatus != OperationStatus.loading,
+          listener: (context, state) {
+            final isSuccess = state.operationStatus == OperationStatus.success;
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(state.operationMessage ?? ''),
+                backgroundColor: isSuccess
+                    ? const Color(0xFF10B981)
+                    : const Color(0xFFEF4444),
+                behavior: SnackBarBehavior.floating,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            );
+            context.read<HotStockBloc>().add(const ClearOperationResultEvent());
+          },
+        ),
+      ],
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(30, 20, 20, 20),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildCarousel(),
+            const SizedBox(height: 16),
+            SizedBox(
+              height: 350,
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  SizedBox(
+                    width: MediaQuery.of(context).size.width / 2,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(
+                          color: const Color(0xFFEDE9FE),
+                          width: 1.5,
+                        ),
+                        boxShadow: [
+                          BoxShadow(
+                            color: const Color(0xFF7C3AED).withOpacity(0.06),
+                            blurRadius: 16,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(16),
+                      child: buildHotStocksSection(context),
+                    ),
+                  ),
+                  const SizedBox(width: 20),
+                  Expanded(child: _buildRightStatGrid()),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Right panel ────────────────────────────────────────────────────────────
+
+  Widget _buildRightStatGrid() {
+    return BlocBuilder<DashboardStatsBloc, DashboardCountState>(
+      builder: (context, state) {
+        final cards = _getStatCards(state);
+
+        if (state.isLoading) return _buildShimmerGrid(cards.length.clamp(1, 6));
+        if (state.isFailure && state.stats == null) {
+          return _buildStatsError(context, state.errorMessage);
+        }
+
+        return _StatCardGrid(cards: cards);
+      },
+    );
+  }
+
+  Widget _buildShimmerGrid(int count) {
+    return _StatCardGrid(
+      cards: List.generate(count, (_) => null),
+      isShimmer: true,
+    );
+  }
+
+  List<_StatCardConfig> _getStatCards(DashboardCountState state) {
+    final s = state.stats;
+    switch (widget.userRole) {
+      case UserRole.SUPER_ADMIN:
+        return [
+          _StatCardConfig(
+            icon: Icons.people_alt_rounded,
+            iconColor: const Color(0xFF7C3AED),
+            iconBg: const Color(0xFFEDE9FE),
+            accentColor: const Color(0xFF7C3AED),
+            title: 'Total Users',
+            value: s != null ? _fmt(s.totalUsers) : '—',
+            trend: '+12% this month',
+            trendUp: true,
+            showTrendBadge: true,
+          ),
+          _StatCardConfig(
+            icon: Icons.admin_panel_settings_rounded,
+            iconColor: const Color(0xFF1D4ED8),
+            iconBg: const Color(0xFFDBEAFE),
+            accentColor: const Color(0xFF1D4ED8),
+            title: 'Total Admins',
+            value: s != null ? _fmt(s.totalAdmins) : '—',
+            trend: 'Active managers',
+            trendUp: true,
+          ),
+          _StatCardConfig(
+            icon: Icons.account_balance_wallet_rounded,
+            iconColor: const Color(0xFF0F766E),
+            iconBg: const Color(0xFFCCFBF1),
+            accentColor: const Color(0xFF0F766E),
+            title: 'Broker Accounts',
+            value: s != null ? _fmt(s.totalBrokerAccounts) : '—',
+            trend: 'Linked brokers',
+            trendUp: true,
+            subPills: s != null
+                ? [
+                    '${s.angelOneAccounts} Angel',
+                    '${s.motilalAccounts} Motilal',
+                    '${s.profitMartAccounts} ProfitMart',
+                    if (s.dhanAccounts > 0) '${s.dhanAccounts} Dhan',
+                    '${s.goodWillAccounts} GoodWill',
+                  ]
+                : [],
+          ),
+          _StatCardConfig(
+            icon: Icons.pending_actions_rounded,
+            iconColor: const Color(0xFFF59E0B),
+            iconBg: const Color(0xFFFEF3C7),
+            accentColor: const Color(0xFFF59E0B),
+            title: 'Pending Requests',
+            value: s != null ? _fmt(s.pendingRequests) : '—',
+            trend: 'Awaiting approval',
+            trendUp: false,
+            subPills: s != null
+                ? [
+                    '${s.approvedRequests} approved',
+                    '${s.rejectedRequests} rejected',
+                  ]
+                : [],
+          ),
+          _StatCardConfig(
+            icon: Icons.workspaces_rounded,
+            iconColor: const Color(0xFF10B981),
+            iconBg: const Color(0xFFD1FAE5),
+            accentColor: const Color(0xFF10B981),
+            title: 'Groups',
+            value: s != null ? _fmt(s.groupCount) : '—',
+            trend: 'Active order groups',
+            trendUp: true,
+          ),
+          _StatCardConfig(
+            icon: Icons.verified_user_rounded,
+            iconColor: const Color(0xFFEF4444),
+            iconBg: const Color(0xFFFFE4E6),
+            accentColor: const Color(0xFFEF4444),
+            title: 'Super Admins',
+            value: s != null ? _fmt(s.totalSuperAdmins) : '—',
+            trend: 'Full root access',
+            trendUp: true,
+          ),
+        ];
+      case UserRole.ADMIN:
+        return [
+          _StatCardConfig(
+            icon: Icons.account_balance_wallet_rounded,
+            iconColor: const Color(0xFF0F766E),
+            iconBg: const Color(0xFFCCFBF1),
+            accentColor: const Color(0xFF0F766E),
+            title: 'Broker Accounts',
+            value: s != null ? _fmt(s.totalBrokerAccounts) : '—',
+            trend: 'Linked brokers',
+            trendUp: true,
+            subPills: s != null
+                ? [
+                    '${s.angelOneAccounts} Angel',
+                    '${s.motilalAccounts} Motilal',
+                    '${s.profitMartAccounts} ProfitMart',
+                    if (s.dhanAccounts > 0) '${s.dhanAccounts} Dhan',
+                    '${s.goodWillAccounts} GoodWill',
+                  ]
+                : [],
+          ),
+          _StatCardConfig(
+            icon: Icons.workspaces_rounded,
+            iconColor: const Color(0xFF10B981),
+            iconBg: const Color(0xFFD1FAE5),
+            accentColor: const Color(0xFF10B981),
+            title: 'Groups',
+            value: s != null ? _fmt(s.groupCount) : '—',
+            trend: 'Active order groups',
+            trendUp: true,
+          ),
+        ];
+      case UserRole.USER:
+        return [
+          _StatCardConfig(
+            icon: Icons.account_balance_wallet_rounded,
+            iconColor: const Color(0xFF7C3AED),
+            iconBg: const Color(0xFFEDE9FE),
+            accentColor: const Color(0xFF7C3AED),
+            title: 'Broker Accounts',
+            value: s != null ? _fmt(s.totalBrokerAccounts) : '—',
+            trend: 'Your linked brokers',
+            trendUp: true,
+            subPills: s != null
+                ? [
+                    '${s.angelOneAccounts} Angel',
+                    '${s.motilalAccounts} Motilal',
+                    '${s.profitMartAccounts} ProfitMart',
+                    if (s.dhanAccounts > 0) '${s.dhanAccounts} Dhan',
+                    '${s.goodWillAccounts} GoodWill',
+                  ]
+                : [],
+          ),
+        ];
+    }
+  }
+
+  String _fmt(int value) {
+    if (value >= 1000000) return '${(value / 1000000).toStringAsFixed(1)}M';
+    if (value >= 1000) return '${(value / 1000).toStringAsFixed(1)}K';
+    return value.toString();
+  }
+
+  Widget _buildStatsError(BuildContext context, String? message) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF1F1),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFFFCDD2)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.error_outline_rounded,
+            color: Color(0xFFEF4444),
+            size: 16,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              message ?? 'Failed to load stats',
+              style: const TextStyle(fontSize: 12, color: Color(0xFFEF4444)),
+            ),
+          ),
+          InkWell(
+            onTap: () {
+              if (pyId != null) {
+                context.read<DashboardStatsBloc>().add(
+                  FetchDashboardStatsEvent(pyId!),
+                );
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                color: const Color(0xFFEF4444).withOpacity(0.10),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Text(
+                'Retry',
+                style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFEF4444),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Carousel ───────────────────────────────────────────────────────────────
+
+  Widget _buildCarousel() {
+    return Column(
+      children: [
+        SizedBox(
+          height: 150,
+          child: PageView.builder(
+            controller: _pageController,
+            itemCount: _slides.length,
+            onPageChanged: (i) => setState(() => _carouselIndex = i),
+            itemBuilder: (_, i) => _CarouselSlide(slide: _slides[i]),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: List.generate(_slides.length, (i) {
+            final active = i == _carouselIndex;
+            return AnimatedContainer(
+              duration: const Duration(milliseconds: 250),
+              margin: const EdgeInsets.symmetric(horizontal: 3),
+              width: active ? 18 : 6,
+              height: 6,
+              decoration: BoxDecoration(
+                color: active ? AppColors.primary : const Color(0xFFDDD6FE),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            );
+          }),
+        ),
+      ],
+    );
+  }
+
+  // ── Hot Stocks Section ─────────────────────────────────────────────────────
+
+  Widget buildHotStocksSection(BuildContext context) {
+    return BlocBuilder<HotStockBloc, HotStockState>(
+      builder: (context, state) {
+        return SizedBox(
+          height: MediaQuery.of(context).size.height / 2,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.local_fire_department_rounded,
+                    color: Color(0xFFEF4444),
+                    size: 30,
+                  ),
+                  const Text(
+                    'Model Portfolio',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.indigo,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  _CategoryChips(
+                    selected: state.selectedCategory,
+                    onSelect: (cat) => context.read<HotStockBloc>().add(
+                      ChangeCategoryEvent(cat),
+                    ),
+                  ),
+                  const Spacer(),
+                  _DatePill(
+                    date: state.selectedDate,
+                    onTap: () => _pickDate(context, state.selectedDate),
+                  ),
+                  if (widget.isSuperAdmin && _isToday(state.selectedDate)) ...[
+                    const SizedBox(width: 8),
+                    _AddButton(onTap: () => _openAddDialog(context, state)),
+                  ],
+                ],
+              ),
+              const SizedBox(height: 12),
+              Expanded(
+                child: state.isLoadingStocks
+                    ? _buildLoadingSkeleton()
+                    : state.loadError != null
+                    ? _buildErrorWithEmpty(context, state)
+                    : state.stocks.where((s) => s.isActive).isEmpty
+                    ? _buildEmpty(state.selectedCategory)
+                    : _buildStockTable(context, state),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildLoadingSkeleton() {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFEDE9FE), width: 1.5),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: ListView.separated(
+          padding: EdgeInsets.zero,
+          itemCount: 4,
+          separatorBuilder: (_, __) =>
+              Container(height: 1, color: const Color(0xFFF0EEFF)),
+          itemBuilder: (_, i) => Container(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
+            color: i.isOdd ? const Color(0xFFFAF9FF) : Colors.white,
+            child: Row(
+              children: [
+                _Shimmer(width: 32, height: 32, radius: 8),
+                const SizedBox(width: 8),
+                Expanded(
+                  flex: 3,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _Shimmer(width: 70, height: 10, radius: 4),
+                      const SizedBox(height: 5),
+                      _Shimmer(width: 100, height: 8, radius: 4),
+                    ],
+                  ),
+                ),
+                _Shimmer(width: 50, height: 10, radius: 4),
+                const SizedBox(width: 12),
+                _Shimmer(width: 40, height: 10, radius: 4),
+                const SizedBox(width: 12),
+                _Shimmer(width: 52, height: 22, radius: 5),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildErrorWithEmpty(BuildContext context, HotStockState state) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: const Color(0xFFFFF1F1),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFFFCDD2)),
+          ),
+          child: Row(
+            children: [
+              const Icon(
+                Icons.error_outline_rounded,
+                color: Color(0xFFEF4444),
+                size: 16,
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  state.loadError!,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFFEF4444),
+                  ),
+                ),
+              ),
+              InkWell(
+                onTap: () => context.read<HotStockBloc>().add(
+                  ChangeDateEvent(state.selectedDate),
+                ),
+                borderRadius: BorderRadius.circular(6),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFEF4444).withOpacity(0.10),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: const Text(
+                    'Retry',
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFFEF4444),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+        _buildEmptyWithAction(context, state),
+      ],
+    );
+  }
+
+  Widget _buildEmpty(HotStockCategory category) {
+    return Center(
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(vertical: 50),
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE5E7EB)),
+          borderRadius: BorderRadius.circular(8),
+          color: const Color(0xFFF9FAFB),
+        ),
+        child: Center(
+          child: Lottie.asset(
+            'assets/animations/No Data.json',
+            width: 200,
+            height: 200,
+            fit: BoxFit.contain,
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmptyWithAction(BuildContext context, HotStockState state) {
+    return Center(
+      child: SingleChildScrollView(
+        child: Column(
+          children: [
+            const Icon(
+              Icons.inbox_outlined,
+              color: Color(0xFFD1D5DB),
+              size: 36,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'No ${state.selectedCategory.label} stocks for this date',
+              style: const TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+            ),
+            if (widget.isSuperAdmin && _isToday(state.selectedDate)) ...[
+              const SizedBox(height: 16),
+              InkWell(
+                onTap: () => _openAddDialog(context, state),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF7C3AED), Color(0xFF9333EA)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF7C3AED).withOpacity(0.30),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Icon(Icons.add_rounded, color: Colors.white, size: 14),
+                      SizedBox(width: 6),
+                      Text(
+                        'Add Stock',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildStockTable(BuildContext context, HotStockState state) {
+    final activeStocks = state.stocks.where((s) => s.isActive).toList();
+    final hasAdmin = widget.isSuperAdmin;
+
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        decoration: BoxDecoration(
+          border: Border.all(color: const Color(0xFFE0D9FF), width: 1.5),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Column(
+          children: [
+            // ── Header row ───────────────────────────────────────────────
+            Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFFF3EEFF), Color(0xFFEEE8FF)],
+                  begin: Alignment.centerLeft,
+                  end: Alignment.centerRight,
+                ),
+              ),
+              child: IntrinsicHeight(
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Expanded(
+                      flex: 28,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 10,
+                        ),
+                        child: _ColLabel('SYMBOL'),
+                      ),
+                    ),
+                    const _TableVLine(headerLine: true),
+                    Expanded(
+                      flex: 18,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        child: _ColLabel('PRICE', right: true),
+                      ),
+                    ),
+                    const _TableVLine(headerLine: true),
+                    Expanded(
+                      flex: 16,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        child: _ColLabel('CHG%', right: true),
+                      ),
+                    ),
+                    const _TableVLine(headerLine: true),
+                    Expanded(
+                      flex: 18,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        child: _ColLabel('TARGET', right: true),
+                      ),
+                    ),
+                    const _TableVLine(headerLine: true),
+                    Expanded(
+                      flex: 16,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        child: _ColLabel('SIGNAL', right: true),
+                      ),
+                    ),
+                    const _TableVLine(headerLine: true),
+                    Expanded(
+                      flex: 22,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 8,
+                          vertical: 10,
+                        ),
+                        child: _ColLabel('TRADE', right: true),
+                      ),
+                    ),
+                    if (hasAdmin) ...[
+                      const _TableVLine(headerLine: true),
+                      Expanded(
+                        flex: 12,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 8,
+                            vertical: 10,
+                          ),
+                          child: _ColLabel('ACTION', right: true),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+            Container(height: 1.5, color: const Color(0xFFCCC5F5)),
+            // ── Data rows ────────────────────────────────────────────────
+            Expanded(
+              child: ListView.separated(
+                padding: EdgeInsets.zero,
+                itemCount: activeStocks.length,
+                separatorBuilder: (_, __) =>
+                    Container(height: 1, color: const Color(0xFFEDE9FE)),
+                itemBuilder: (_, i) => _StockRow(
+                  stock: activeStocks[i],
+                  isLast: i == activeStocks.length - 1,
+                  shade: i.isOdd,
+                  isSuperAdmin: hasAdmin,
+                  activeAccounts: _activeAccounts,
+                  loadingBalanceIds: _loadingBalanceIds,
+                  onEdit: () =>
+                      _openEditDialog(context, state, activeStocks[i]),
+                  onDelete: () => _confirmDelete(context, activeStocks[i]),
+                  onAccountSelected: (account, side) =>
+                      _requestBalanceThenOpenPanel(
+                        stock: activeStocks[i],
+                        side: side,
+                        account: account,
+                        ltpData: LtpData(
+                          ltp: activeStocks[i].price,
+                          open: activeStocks[i].price,
+                          high: activeStocks[i].price,
+                          low: activeStocks[i].price,
+                          close: activeStocks[i].price,
+                          change: activeStocks[i].changePercent ?? 0.0,
+                          percentChange: activeStocks[i].changePercent ?? 0.0,
+                        ),
+                      ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _openAddDialog(BuildContext context, HotStockState state) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: context.read<HotStockBloc>()),
+          BlocProvider.value(value: context.read<IndividualExecutionBloc>()),
+        ],
+        child: _HotStockFormDialog(
+          title: 'Add Hot Stock',
+          pyId: pyId ?? 0,
+          defaultCategory: state.selectedCategory,
+          onSubmit: (req) =>
+              context.read<HotStockBloc>().add(AddHotStockEvent(req)),
+        ),
+      ),
+    );
+  }
+
+  void _openEditDialog(
+    BuildContext context,
+    HotStockState state,
+    HotStockModel stock,
+  ) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => MultiBlocProvider(
+        providers: [
+          BlocProvider.value(value: context.read<HotStockBloc>()),
+          BlocProvider.value(value: context.read<IndividualExecutionBloc>()),
+        ],
+        child: _HotStockFormDialog(
+          title: 'Edit Stock',
+          pyId: pyId ?? 0,
+          defaultCategory: stock.category,
+          existingStock: stock,
+          onSubmit: (req) =>
+              context.read<HotStockBloc>().add(UpdateHotStockEvent(req)),
+        ),
+      ),
+    );
+  }
+
+  void _confirmDelete(BuildContext context, HotStockModel stock) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        title: const Text(
+          'Remove Stock',
+          style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+        ),
+        content: Text(
+          'Remove ${stock.symbol} from hot stocks? This is a soft delete — it will still appear in date history.',
+          style: const TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text(
+              'Cancel',
+              style: TextStyle(color: Color(0xFF6B7280)),
+            ),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFEF4444),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+              ),
+              elevation: 0,
+            ),
+            onPressed: () {
+              Navigator.pop(ctx);
+              context.read<HotStockBloc>().add(
+                DeleteHotStockEvent(stock.stockId),
+              );
+            },
+            child: const Text(
+              'Remove',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Pending trade helper model
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _PendingTrade {
+  final HotStockModel stock;
+  final String side;
+  final Map<String, dynamic> account;
+  final LtpData? ltpData;
+
+  const _PendingTrade({
+    required this.stock,
+    required this.side,
+    required this.account,
+    this.ltpData,
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _StatCardGrid
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StatCardGrid extends StatelessWidget {
+  final List<_StatCardConfig?> cards;
+  final bool isShimmer;
+
+  const _StatCardGrid({required this.cards, this.isShimmer = false});
+
+  @override
+  Widget build(BuildContext context) {
+    final count = cards.length;
+
+    if (count == 0) return const SizedBox.shrink();
+
+    if (count == 1) {
+      return _buildCard(cards[0], horizontal: true);
+    }
+
+    if (count == 2) {
+      return Column(
+        children: [
+          Expanded(child: _buildCard(cards[0], horizontal: true)),
+          const SizedBox(height: 10),
+          Expanded(child: _buildCard(cards[1], horizontal: true)),
+        ],
+      );
+    }
+
+    if (count == 3) {
+      return Row(
+        children: [
+          Expanded(child: _buildCard(cards[0])),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              children: [
+                Expanded(child: _buildCard(cards[1])),
+                const SizedBox(height: 10),
+                Expanded(child: _buildCard(cards[2])),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (count == 4) {
+      return Column(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildCard(cards[0])),
+                const SizedBox(width: 10),
+                Expanded(child: _buildCard(cards[1])),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildCard(cards[2])),
+                const SizedBox(width: 10),
+                Expanded(child: _buildCard(cards[3])),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (count == 5) {
+      return Column(
+        children: [
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildCard(cards[0])),
+                const SizedBox(width: 10),
+                Expanded(child: _buildCard(cards[1])),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildCard(cards[2])),
+                const SizedBox(width: 10),
+                Expanded(child: _buildCard(cards[3])),
+              ],
+            ),
+          ),
+          const SizedBox(height: 10),
+          Expanded(child: _buildCard(cards[4], horizontal: true)),
+        ],
+      );
+    }
+
+    return Column(
+      children: [
+        for (int row = 0; row < 3; row++) ...[
+          if (row > 0) const SizedBox(height: 10),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(child: _buildCard(cards[row * 2])),
+                const SizedBox(width: 10),
+                Expanded(child: _buildCard(cards[row * 2 + 1])),
+              ],
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+
+  Widget _buildCard(_StatCardConfig? config, {bool horizontal = false}) {
+    if (isShimmer || config == null) {
+      return _ShimmerCard(horizontal: horizontal);
+    }
+    return _StatCard(config: config, horizontal: horizontal);
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _StatCardConfig
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StatCardConfig {
+  final IconData icon;
+  final Color iconColor;
+  final Color iconBg;
+  final Color accentColor;
+  final String title;
+  final String value;
+  final String trend;
+  final bool trendUp;
+  final bool showTrendBadge;
+  final List<String> subPills;
+
+  const _StatCardConfig({
+    required this.icon,
+    required this.iconColor,
+    required this.iconBg,
+    required this.accentColor,
+    required this.title,
+    required this.value,
+    required this.trend,
+    this.trendUp = true,
+    this.showTrendBadge = false,
+    this.subPills = const [],
+  });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _StatCard
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StatCard extends StatelessWidget {
+  final _StatCardConfig config;
+  final bool horizontal;
+
+  const _StatCard({required this.config, this.horizontal = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFF0EEFF), width: 1),
+        boxShadow: [
+          BoxShadow(
+            color: config.accentColor.withOpacity(0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
+          ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: horizontal ? _buildHorizontal() : _buildVertical(),
+    );
+  }
+
+  Widget _buildHorizontal() {
+    return Row(
+      children: [
+        Container(width: 4, color: config.accentColor),
+        Container(
+          width: 72,
+          color: config.iconBg.withOpacity(0.35),
+          child: Center(
+            child: Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: config.iconBg,
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(config.icon, color: config.iconColor, size: 20),
+            ),
+          ),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  config.title,
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF6B7280),
+                    letterSpacing: 0.2,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  config.value,
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
+                    color: config.accentColor,
+                    height: 1.0,
+                    letterSpacing: -0.5,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Container(height: 0.5, color: const Color(0xFFEEEEEE)),
+                const SizedBox(height: 6),
+                if (config.subPills.isNotEmpty)
+                  _SubPillRow(pills: config.subPills)
+                else
+                  _TrendRow(
+                    label: config.trend,
+                    up: config.trendUp,
+                    showBadge: config.showTrendBadge,
+                  ),
+              ],
+            ),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(right: 20),
+          child: Icon(
+            config.icon,
+            size: 48,
+            color: config.accentColor.withOpacity(0.07),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVertical() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(height: 3, color: config.accentColor),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 28,
+                        height: 28,
+                        decoration: BoxDecoration(
+                          color: config.iconBg,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Icon(
+                          config.icon,
+                          color: config.iconColor,
+                          size: 14,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          config.title,
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Color(0xFF6B7280),
+                            letterSpacing: 0.1,
+                          ),
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                    ],
+                  ),
+                  Text(
+                    config.value,
+                    style: TextStyle(
+                      fontSize: 26,
+                      fontWeight: FontWeight.w700,
+                      color: config.accentColor,
+                      height: 1.0,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(height: 0.5, color: const Color(0xFFEEEEEE)),
+                      const SizedBox(height: 5),
+                      if (config.subPills.isNotEmpty)
+                        _SubPillRow(pills: config.subPills)
+                      else
+                        _TrendRow(
+                          label: config.trend,
+                          up: config.trendUp,
+                          showBadge: config.showTrendBadge,
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _ShimmerCard
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ShimmerCard extends StatelessWidget {
+  final bool horizontal;
+  const _ShimmerCard({this.horizontal = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFEDE9FE)),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: horizontal ? _buildHorizontal() : _buildVertical(),
+    );
+  }
+
+  Widget _buildHorizontal() {
+    return Row(
+      children: [
+        Container(width: 4, color: const Color(0xFFEDE9FE)),
+        Container(
+          width: 72,
+          color: const Color(0xFFF5F3FF),
+          child: Center(child: _Shimmer(width: 40, height: 40, radius: 10)),
+        ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _Shimmer(width: 80, height: 10, radius: 4),
+                const SizedBox(height: 8),
+                _Shimmer(width: 60, height: 26, radius: 6),
+                const SizedBox(height: 10),
+                _Shimmer(width: 120, height: 8, radius: 4),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildVertical() {
+    return Padding(
+      padding: const EdgeInsets.all(14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              _Shimmer(width: 28, height: 28, radius: 8),
+              const SizedBox(width: 8),
+              _Shimmer(width: 70, height: 9, radius: 4),
+            ],
+          ),
+          _Shimmer(width: 50, height: 22, radius: 6),
+          _Shimmer(width: 110, height: 8, radius: 4),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _AccountPickerDialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AccountPickerDialog extends StatefulWidget {
+  final List<Map<String, dynamic>> accounts;
+  final String side;
+  final String stockSymbol;
+  final Set<int> loadingBalanceIds;
+  final void Function(Map<String, dynamic> account) onSelect;
+
+  const _AccountPickerDialog({
+    required this.accounts,
+    required this.side,
+    required this.stockSymbol,
+    required this.loadingBalanceIds,
+    required this.onSelect,
+  });
+
+  @override
+  State<_AccountPickerDialog> createState() => _AccountPickerDialogState();
+}
+
+class _AccountPickerDialogState extends State<_AccountPickerDialog> {
+  final _searchCtrl = TextEditingController();
+  List<Map<String, dynamic>> _filtered = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _filtered = List.from(widget.accounts);
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  void _filter(String query) {
+    final q = query.toLowerCase();
+    setState(() {
+      _filtered = widget.accounts.where((a) {
+        return a['name'].toString().toLowerCase().contains(q) ||
+            a['clientCode'].toString().toLowerCase().contains(q) ||
+            a['broker'].toString().toLowerCase().contains(q);
+      }).toList();
+    });
+  }
+
+  Color get _sideColor =>
+      widget.side == 'BUY' ? const Color(0xFF059669) : const Color(0xFFDC2626);
+
+  Color get _sideBg =>
+      widget.side == 'BUY' ? const Color(0xFFD1FAE5) : const Color(0xFFFEE2E2);
+
+  Color get _sideLightBg =>
+      widget.side == 'BUY' ? const Color(0xFFF0FDF4) : const Color(0xFFFFF5F5);
+
+  // ── Updated broker color mapping (removed Upstox, added ProfitMart & GoodWill) ──
+  Color _brokerColor(String broker) {
+    final b = broker.toUpperCase();
+    if (b.contains('ANGEL')) return const Color(0xFF7C3AED);
+    if (b.contains('MOTILAL')) return const Color(0xFF1D4ED8);
+    if (b.contains('PROFITMART') ||
+        b.contains('PROFIT_MART') ||
+        b.contains('PROFIT MART')) {
+      return const Color(0xFF0891B2);
+    }
+    if (b.contains('GOODWILL') ||
+        b.contains('GOOD_WILL') ||
+        b.contains('GOOD WILL')) {
+      return const Color(0xFF059669);
+    }
+    if (b.contains('ZERODHA')) return const Color(0xFF16A34A);
+    return const Color(0xFF6B7280);
+  }
+
+  // ── Updated short broker name mapping ──
+  String _shortBroker(String broker) {
+    final b = broker.toUpperCase();
+    if (b.contains('ANGEL')) return 'Angel';
+    if (b.contains('MOTILAL')) return 'Motilal';
+    if (b.contains('PROFITMART') ||
+        b.contains('PROFIT_MART') ||
+        b.contains('PROFIT MART')) {
+      return 'ProfitMart';
+    }
+    if (b.contains('GOODWILL') ||
+        b.contains('GOOD_WILL') ||
+        b.contains('GOOD WILL')) {
+      return 'GoodWill';
+    }
+    if (b.contains('ZERODHA')) return 'Zerodha';
+    return broker.length > 9 ? broker.substring(0, 9) : broker;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      insetPadding: const EdgeInsets.symmetric(horizontal: 32, vertical: 60),
+      child: Container(
+        width: 360,
+        constraints: const BoxConstraints(maxHeight: 520),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: _sideColor.withOpacity(0.18),
+              blurRadius: 32,
+              offset: const Offset(0, 8),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // ── Header ─────────────────────────────────────────────────
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              decoration: BoxDecoration(
+                color: _sideBg,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(16),
+                ),
+                border: Border(
+                  bottom: BorderSide(color: _sideColor.withOpacity(0.20)),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 34,
+                    height: 34,
+                    decoration: BoxDecoration(
+                      color: _sideColor,
+                      borderRadius: BorderRadius.circular(9),
+                    ),
+                    child: Icon(
+                      widget.side == 'BUY'
+                          ? Icons.trending_up_rounded
+                          : Icons.trending_down_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${widget.side} ${widget.stockSymbol}',
+                          style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            color: _sideColor,
+                          ),
+                        ),
+                        Text(
+                          'Select a broker account to place order',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: _sideColor.withOpacity(0.70),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  InkWell(
+                    onTap: () => Navigator.of(context).pop(),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: _sideColor.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Icon(
+                        Icons.close_rounded,
+                        size: 15,
+                        color: _sideColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
+            // ── Search bar ─────────────────────────────────────────────
+            Padding(
+              padding: const EdgeInsets.fromLTRB(14, 12, 14, 6),
+              child: Container(
+                height: 38,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF9F9FF),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: TextField(
+                  controller: _searchCtrl,
+                  onChanged: _filter,
+                  style: const TextStyle(
+                    fontSize: 12,
+                    color: Color(0xFF1F2937),
+                  ),
+                  decoration: const InputDecoration(
+                    hintText: 'Search by name, code, broker…',
+                    hintStyle: TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF9CA3AF),
+                    ),
+                    prefixIcon: Icon(
+                      Icons.search_rounded,
+                      size: 16,
+                      color: Color(0xFF9CA3AF),
+                    ),
+                    border: InputBorder.none,
+                    contentPadding: EdgeInsets.symmetric(vertical: 9),
+                    isDense: true,
+                  ),
+                ),
+              ),
+            ),
+
+            // ── Account count badge ────────────────────────────────────
+            if (_filtered.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 2, 14, 4),
+                child: Row(
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 3,
+                      ),
+                      decoration: BoxDecoration(
+                        color: _sideColor.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Text(
+                        '${_filtered.length} active account${_filtered.length != 1 ? 's' : ''}',
+                        style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w600,
+                          color: _sideColor,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+            // ── Account list ───────────────────────────────────────────
+            if (_filtered.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Column(
+                  children: [
+                    Icon(
+                      Icons.account_balance_wallet_outlined,
+                      size: 36,
+                      color: Colors.grey.shade300,
+                    ),
+                    const SizedBox(height: 8),
+                    const Text(
+                      'No active accounts found',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF9CA3AF)),
+                    ),
+                  ],
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.separated(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 14),
+                  shrinkWrap: true,
+                  itemCount: _filtered.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 6),
+                  itemBuilder: (_, i) {
+                    final acc = _filtered[i];
+                    final isOwn = acc['isOwn'] == true;
+                    final broker = acc['broker'].toString();
+                    final brokerColor = _brokerColor(broker);
+                    final accountId = acc['id'] as int? ?? 0;
+                    final isLoading = widget.loadingBalanceIds.contains(
+                      accountId,
+                    );
+
+                    return InkWell(
+                      onTap: isLoading
+                          ? null
+                          : () {
+                              Navigator.of(context).pop();
+                              widget.onSelect(acc);
+                            },
+                      borderRadius: BorderRadius.circular(10),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 10,
+                        ),
+                        decoration: BoxDecoration(
+                          color: isOwn ? const Color(0xFFFFFBEB) : _sideLightBg,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: isOwn
+                                ? const Color(0xFFFCD34D).withOpacity(0.6)
+                                : _sideColor.withOpacity(0.12),
+                            width: 1.2,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            // Avatar
+                            Container(
+                              width: 38,
+                              height: 38,
+                              decoration: BoxDecoration(
+                                color: _sideColor.withOpacity(0.12),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Center(
+                                child: Text(
+                                  acc['name'].toString().isNotEmpty
+                                      ? acc['name'].toString()[0].toUpperCase()
+                                      : '?',
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w800,
+                                    color: _sideColor,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            // Name + code
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      if (isOwn) ...[
+                                        const Icon(
+                                          Icons.star_rounded,
+                                          size: 12,
+                                          color: Color(0xFFD97706),
+                                        ),
+                                        const SizedBox(width: 3),
+                                      ],
+                                      Expanded(
+                                        child: Text(
+                                          acc['name'].toString(),
+                                          style: const TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF1F2937),
+                                          ),
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 2),
+                                  Text(
+                                    acc['clientCode'].toString(),
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      color: Color(0xFF6B7280),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            // Broker tag
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 7,
+                                vertical: 3,
+                              ),
+                              decoration: BoxDecoration(
+                                color: brokerColor.withOpacity(0.10),
+                                borderRadius: BorderRadius.circular(5),
+                                border: Border.all(
+                                  color: brokerColor.withOpacity(0.30),
+                                ),
+                              ),
+                              child: Text(
+                                _shortBroker(broker),
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.w700,
+                                  color: brokerColor,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            // Loading spinner OR arrow
+                            Container(
+                              width: 28,
+                              height: 28,
+                              decoration: BoxDecoration(
+                                color: _sideColor.withOpacity(0.10),
+                                borderRadius: BorderRadius.circular(7),
+                              ),
+                              child: isLoading
+                                  ? Padding(
+                                      padding: const EdgeInsets.all(6),
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                        color: _sideColor,
+                                      ),
+                                    )
+                                  : Icon(
+                                      Icons.arrow_forward_ios_rounded,
+                                      size: 12,
+                                      color: _sideColor,
+                                    ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _SubPillRow
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _SubPillRow extends StatelessWidget {
+  final List<String> pills;
+  const _SubPillRow({required this.pills});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 3,
+      runSpacing: 3,
+      children: pills.map((label) {
+        Color pillBg, pillFg, pillBorder;
+        if (label.contains('approved')) {
+          pillBg = const Color(0xFFD1FAE5);
+          pillFg = const Color(0xFF059669);
+          pillBorder = const Color(0xFF6EE7B7);
+        } else if (label.contains('rejected')) {
+          pillBg = const Color(0xFFFEE2E2);
+          pillFg = const Color(0xFFDC2626);
+          pillBorder = const Color(0xFFFCA5A5);
+        } else if (label.contains('ProfitMart')) {
+          pillBg = const Color(0xFFE0F2FE);
+          pillFg = const Color(0xFF0891B2);
+          pillBorder = const Color(0xFFBAE6FD);
+        } else if (label.contains('GoodWill')) {
+          pillBg = const Color(0xFFD1FAE5);
+          pillFg = const Color(0xFF059669);
+          pillBorder = const Color(0xFF6EE7B7);
+        } else {
+          pillBg = const Color(0xFFF5F3FF);
+          pillFg = const Color(0xFF7C3AED);
+          pillBorder = const Color(0xFFDDD6FE);
+        }
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+          decoration: BoxDecoration(
+            color: pillBg,
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(color: pillBorder, width: 0.7),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 9,
+              fontWeight: FontWeight.w600,
+              color: pillFg,
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _TrendRow
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TrendRow extends StatelessWidget {
+  final String label;
+  final bool up;
+  final bool showBadge;
+  const _TrendRow({
+    required this.label,
+    required this.up,
+    this.showBadge = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = up ? const Color(0xFF10B981) : const Color(0xFFF59E0B);
+    final parts = label.split(' ');
+
+    if (showBadge && parts.isNotEmpty) {
+      return Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(99),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(
+                  up
+                      ? Icons.arrow_upward_rounded
+                      : Icons.arrow_downward_rounded,
+                  size: 9,
+                  color: color,
+                ),
+                const SizedBox(width: 2),
+                Text(
+                  parts.first,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(width: 4),
+          Expanded(
+            child: Text(
+              parts.skip(1).join(' '),
+              style: const TextStyle(
+                fontSize: 9,
+                color: Color(0xFF9CA3AF),
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+              maxLines: 1,
+            ),
+          ),
+        ],
+      );
+    }
+
+    return Row(
+      children: [
+        Icon(
+          up ? Icons.trending_up_rounded : Icons.trending_down_rounded,
+          size: 11,
+          color: color,
+        ),
+        const SizedBox(width: 3),
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(
+              fontSize: 9,
+              color: Color(0xFF9CA3AF),
+              fontWeight: FontWeight.w500,
+            ),
+            overflow: TextOverflow.ellipsis,
+            maxLines: 1,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _TableVLine
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TableVLine extends StatelessWidget {
+  final bool headerLine;
+  const _TableVLine({this.headerLine = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 1,
+      color: headerLine ? const Color(0xFFD4C9FF) : const Color(0xFFEDE9FE),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _DatePill
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _DatePill extends StatelessWidget {
+  final String date;
+  final VoidCallback onTap;
+  const _DatePill({required this.date, required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    String display = date;
+    try {
+      final parsed = DateFormat('yyyy-MM-dd').parse(date);
+      final today = DateTime.now();
+      if (parsed.year == today.year &&
+          parsed.month == today.month &&
+          parsed.day == today.day) {
+        display = 'Today';
+      } else {
+        display = DateFormat('d MMM').format(parsed);
+      }
+    } catch (_) {}
+
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(8),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F3FF),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: const Color(0xFFDDD6FE)),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.calendar_today_rounded,
+              size: 11,
+              color: Color(0xFF7C3AED),
+            ),
+            const SizedBox(width: 5),
+            Text(
+              display,
+              style: const TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF7C3AED),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _AddButton
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _AddButton extends StatelessWidget {
+  final VoidCallback onTap;
+  const _AddButton({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF7C3AED), Color(0xFF9333EA)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(8),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF7C3AED).withOpacity(0.30),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: const [
+            Icon(Icons.add_rounded, color: Colors.white, size: 14),
+            SizedBox(width: 4),
+            Text(
+              'Add Stock',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.3,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _CategoryChips
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _CategoryChips extends StatelessWidget {
+  final HotStockCategory selected;
+  final void Function(HotStockCategory) onSelect;
+  const _CategoryChips({required this.selected, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: HotStockCategory.values.map((cat) {
+          final isSelected = cat == selected;
+          return Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InkWell(
+              onTap: () => onSelect(cat),
+              borderRadius: BorderRadius.circular(5),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 7,
+                ),
+                decoration: BoxDecoration(
+                  color: isSelected
+                      ? const Color(0xFF7C3AED)
+                      : const Color(0xFFF5F3FF),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: isSelected
+                        ? const Color(0xFF7C3AED)
+                        : const Color(0xFFDDD6FE),
+                  ),
+                ),
+                child: Text(
+                  cat.label,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.bold,
+                    color: isSelected ? Colors.white : const Color(0xFF7C3AED),
+                    letterSpacing: 0.2,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _StockRow
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _StockRow extends StatelessWidget {
+  final HotStockModel stock;
+  final bool isLast;
+  final bool shade;
+  final bool isSuperAdmin;
+  final List<Map<String, dynamic>> activeAccounts;
+  final Set<int> loadingBalanceIds;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+  final void Function(Map<String, dynamic> account, String side)
+  onAccountSelected;
+
+  const _StockRow({
+    required this.stock,
+    required this.isLast,
+    required this.shade,
+    required this.isSuperAdmin,
+    required this.activeAccounts,
+    required this.loadingBalanceIds,
+    required this.onEdit,
+    required this.onDelete,
+    required this.onAccountSelected,
+  });
+
+  void _showAccountPicker(BuildContext context, String side) {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      barrierColor: Colors.black.withOpacity(0.45),
+      builder: (_) => _AccountPickerDialog(
+        accounts: activeAccounts,
+        side: side,
+        stockSymbol: stock.symbol,
+        loadingBalanceIds: loadingBalanceIds,
+        onSelect: (account) => onAccountSelected(account, side),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: shade ? const Color(0xFFFAF9FF) : Colors.white,
+      child: IntrinsicHeight(
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // SYMBOL
+            Expanded(
+              flex: 28,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      stock.symbol,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1F2937),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    Text(
+                      stock.companyName,
+                      style: const TextStyle(
+                        fontSize: 10,
+                        color: Color(0xFF9CA3AF),
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const _TableVLine(),
+            // PRICE
+            Expanded(
+              flex: 18,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
+                ),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '₹${stock.price.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1F2937),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const _TableVLine(),
+            // CHG%
+            Expanded(
+              flex: 16,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 4,
+                  vertical: 10,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Icon(
+                      stock.direction == HotStockDirection.UP
+                          ? Icons.arrow_drop_up_rounded
+                          : Icons.arrow_drop_down_rounded,
+                      color: stock.direction == HotStockDirection.UP
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFFEF4444),
+                      size: 16,
+                    ),
+                    Text(
+                      stock.changePercent != null
+                          ? '${stock.changePercent!.toStringAsFixed(1)}%'
+                          : '-',
+                      style: TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w600,
+                        color: stock.direction == HotStockDirection.UP
+                            ? const Color(0xFF10B981)
+                            : const Color(0xFFEF4444),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const _TableVLine(),
+            // TARGET
+            Expanded(
+              flex: 18,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 8,
+                  vertical: 10,
+                ),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Text(
+                    '₹${stock.target.toStringAsFixed(0)}',
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const _TableVLine(),
+            // SIGNAL
+            Expanded(
+              flex: 16,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 10,
+                ),
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: _signalColor(stock.signal).withOpacity(0.10),
+                      borderRadius: BorderRadius.circular(5),
+                    ),
+                    child: Text(
+                      stock.signal.label,
+                      style: TextStyle(
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        color: _signalColor(stock.signal),
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+            const _TableVLine(),
+            // TRADE buttons
+            Expanded(
+              flex: 22,
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 6,
+                  vertical: 10,
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    _TradeBtn(
+                      label: 'B',
+                      color: const Color(0xFF059669),
+                      bg: const Color(0xFFD1FAE5),
+                      labelColor: const Color(0xFF059669),
+                      tooltip: 'Buy ${stock.symbol}',
+                      onTap: () => _showAccountPicker(context, 'BUY'),
+                    ),
+                    const SizedBox(width: 5),
+                    _TradeBtn(
+                      label: 'S',
+                      color: const Color(0xFFDC2626),
+                      bg: const Color(0xFFFEE2E2),
+                      labelColor: const Color(0xFFDC2626),
+                      tooltip: 'Sell ${stock.symbol}',
+                      onTap: () => _showAccountPicker(context, 'SELL'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            if (isSuperAdmin) ...[
+              const _TableVLine(),
+              Expanded(
+                flex: 12,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 4,
+                    vertical: 10,
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      InkWell(
+                        onTap: onEdit,
+                        borderRadius: BorderRadius.circular(5),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.edit_rounded,
+                            size: 14,
+                            color: Color(0xFF7C3AED),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 2),
+                      InkWell(
+                        onTap: onDelete,
+                        borderRadius: BorderRadius.circular(5),
+                        child: const Padding(
+                          padding: EdgeInsets.all(4),
+                          child: Icon(
+                            Icons.delete_outline_rounded,
+                            size: 14,
+                            color: Color(0xFFEF4444),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _signalColor(HotStockSignal signal) {
+    switch (signal) {
+      case HotStockSignal.BUY:
+        return const Color(0xFF10B981);
+      case HotStockSignal.STRONG_BUY:
+        return const Color(0xFF7C3AED);
+      case HotStockSignal.HOLD:
+        return const Color(0xFFF59E0B);
+      case HotStockSignal.SELL:
+        return const Color(0xFFEF4444);
+    }
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _TradeBtn
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _TradeBtn extends StatelessWidget {
+  final String label;
+  final Color color;
+  final Color bg;
+  final Color labelColor;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  const _TradeBtn({
+    required this.label,
+    required this.color,
+    required this.bg,
+    required this.labelColor,
+    required this.tooltip,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(5),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(5),
+            border: Border.all(color: color.withOpacity(0.35)),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: labelColor,
+              letterSpacing: 0.3,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _HotStockFormDialog
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _HotStockFormDialog extends StatefulWidget {
+  final String title;
+  final int pyId;
+  final HotStockCategory defaultCategory;
+  final HotStockModel? existingStock;
+  final void Function(HotStockOperationRequest) onSubmit;
+
+  const _HotStockFormDialog({
+    required this.title,
+    required this.pyId,
+    required this.defaultCategory,
+    required this.onSubmit,
+    this.existingStock,
+  });
+
+  @override
+  State<_HotStockFormDialog> createState() => _HotStockFormDialogState();
+}
+
+class _HotStockFormDialogState extends State<_HotStockFormDialog> {
+  final _formKey = GlobalKey<FormState>();
+
+  late final TextEditingController _symbolCtrl;
+  late final TextEditingController _nameCtrl;
+  late final TextEditingController _priceCtrl;
+  late final TextEditingController _changeCtrl;
+  late final TextEditingController _targetCtrl;
+
+  final _searchCtrl = TextEditingController();
+  final _searchFocus = FocusNode();
+  Timer? _debounce;
+  List<ScripInfo> _searchResults = [];
+  bool _searchLoading = false;
+  bool _showDropdown = false;
+  String _exchange = 'NSE';
+  bool _ltpLoading = false;
+  ScripInfo? _selectedScrip;
+
+  String? _symbolToken;
+
+  late HotStockSignal _signal;
+  late HotStockDirection _direction;
+  late HotStockCategory _category;
+
+  bool get _isEdit => widget.existingStock != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final s = widget.existingStock;
+    _symbolCtrl = TextEditingController(text: s?.symbol ?? '');
+    _nameCtrl = TextEditingController(text: s?.companyName ?? '');
+    _priceCtrl = TextEditingController(
+      text: s != null ? s.price.toStringAsFixed(0) : '',
+    );
+    _changeCtrl = TextEditingController(
+      text: s?.changePercent != null
+          ? s!.changePercent!.toStringAsFixed(1)
+          : '',
+    );
+    _targetCtrl = TextEditingController(
+      text: s != null ? s.target.toStringAsFixed(0) : '',
+    );
+    _signal = s?.signal ?? HotStockSignal.BUY;
+    _direction = s?.direction ?? HotStockDirection.UP;
+    _category = s?.category ?? widget.defaultCategory;
+    _symbolToken = s?.symbolToken;
+  }
+
+  @override
+  void dispose() {
+    _symbolCtrl.dispose();
+    _nameCtrl.dispose();
+    _priceCtrl.dispose();
+    _changeCtrl.dispose();
+    _targetCtrl.dispose();
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    _debounce?.cancel();
+    super.dispose();
+  }
+
+  void _onSearchChanged(String val) {
+    _debounce?.cancel();
+    if (val.length < 2) {
+      setState(() {
+        _searchResults = [];
+        _showDropdown = false;
+      });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 350), () {
+      setState(() => _searchLoading = true);
+      context.read<IndividualExecutionBloc>().add(
+        SearchScripRequested(query: val, exchange: _exchange),
+      );
+    });
+  }
+
+  void _selectScrip(ScripInfo s) {
+    final cleanSymbol = s.tradingSymbol.replaceAll('-EQ', '').trim();
+    final companyName = s.tradingSymbol.trim();
+
+    setState(() {
+      _selectedScrip = s;
+      _symbolCtrl.text = cleanSymbol.toUpperCase();
+      _nameCtrl.text = companyName;
+      _symbolToken = s.symbolToken;
+      _searchCtrl.clear();
+      _searchResults = [];
+      _showDropdown = false;
+      _ltpLoading = true;
+    });
+    _searchFocus.unfocus();
+    context.read<IndividualExecutionBloc>().add(LtpRequested(s));
+  }
+
+  void _submit() {
+    if (!_formKey.currentState!.validate()) return;
+    if (_isEdit) {
+      widget.onSubmit(
+        HotStockOperationRequest(
+          actionType: HotStockActionType.UPDATE,
+          stockId: widget.existingStock!.stockId,
+          symbol: _symbolCtrl.text.trim().toUpperCase(),
+          companyName: _nameCtrl.text.trim(),
+          price: double.tryParse(_priceCtrl.text.trim()),
+          target: double.tryParse(_targetCtrl.text.trim()),
+          changePercent: double.tryParse(_changeCtrl.text.trim()),
+          direction: _direction,
+          signal: _signal,
+          category: _category,
+          symbolToken: _symbolToken,
+        ),
+      );
+    } else {
+      widget.onSubmit(
+        HotStockOperationRequest(
+          actionType: HotStockActionType.ADD,
+          pyId: widget.pyId,
+          symbol: _symbolCtrl.text.trim().toUpperCase(),
+          companyName: _nameCtrl.text.trim(),
+          price: double.tryParse(_priceCtrl.text.trim()),
+          target: double.tryParse(_targetCtrl.text.trim()),
+          changePercent: double.tryParse(_changeCtrl.text.trim()),
+          direction: _direction,
+          signal: _signal,
+          category: _category,
+          symbolToken: _symbolToken,
+        ),
+      );
+    }
+    Navigator.of(context).pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return BlocListener<IndividualExecutionBloc, IndividualExecutionState>(
+      listener: (context, state) {
+        if (state is ScripSearchSuccess) {
+          setState(() {
+            _searchResults = state.results;
+            _searchLoading = false;
+            _showDropdown = true;
+          });
+        } else if (state is ScripSearchLoading) {
+          setState(() => _searchLoading = true);
+        } else if (state is ScripSearchFailure) {
+          setState(() {
+            _searchResults = [];
+            _searchLoading = false;
+            _showDropdown = false;
+          });
+        } else if (state is LtpSuccess &&
+            _selectedScrip != null &&
+            state.scrip.symbolToken == _selectedScrip!.symbolToken) {
+          setState(() {
+            _ltpLoading = false;
+            _priceCtrl.text = state.ltpData.ltp.toStringAsFixed(2);
+            _changeCtrl.text = state.ltpData.change.toStringAsFixed(2);
+            _direction = state.ltpData.change >= 0
+                ? HotStockDirection.UP
+                : HotStockDirection.DOWN;
+          });
+        } else if (state is LtpFailure) {
+          setState(() => _ltpLoading = false);
+        }
+      },
+      child: Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
+        child: Container(
+          width: 480,
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: const Color(0xFF7C3AED).withOpacity(0.15),
+                blurRadius: 32,
+                offset: const Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _buildDialogHeader(),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        _labelText('SEARCH STOCK'),
+                        const SizedBox(height: 6),
+                        _buildScripSearch(),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _field(
+                                label: 'SYMBOL',
+                                hint: 'e.g. RELIANCE',
+                                ctrl: _symbolCtrl,
+                                formatters: [
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[a-zA-Z0-9&]'),
+                                  ),
+                                  LengthLimitingTextInputFormatter(20),
+                                ],
+                                required: true,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _field(
+                                label: 'COMPANY NAME',
+                                hint: 'e.g. Reliance Ind.',
+                                ctrl: _nameCtrl,
+                                required: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _field(
+                                label: 'PRICE (₹)',
+                                hint: 'e.g. 2847',
+                                ctrl: _priceCtrl,
+                                keyboard: TextInputType.number,
+                                formatters: [
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[0-9.]'),
+                                  ),
+                                ],
+                                required: true,
+                                suffix: _ltpLoading
+                                    ? const SizedBox(
+                                        width: 14,
+                                        height: 14,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 1.5,
+                                          color: Color(0xFF7C3AED),
+                                        ),
+                                      )
+                                    : null,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: _field(
+                                label: 'TARGET (₹)',
+                                hint: 'e.g. 3200',
+                                ctrl: _targetCtrl,
+                                keyboard: TextInputType.number,
+                                formatters: [
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[0-9.]'),
+                                  ),
+                                ],
+                                required: true,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _field(
+                                label: 'CHANGE %',
+                                hint: 'e.g. 2.4',
+                                ctrl: _changeCtrl,
+                                keyboard: TextInputType.number,
+                                formatters: [
+                                  FilteringTextInputFormatter.allow(
+                                    RegExp(r'[0-9.]'),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(child: _directionToggle()),
+                          ],
+                        ),
+                        const SizedBox(height: 14),
+                        _labelText('CATEGORY'),
+                        const SizedBox(height: 6),
+                        _categorySelector(),
+                        const SizedBox(height: 14),
+                        _labelText('SIGNAL'),
+                        const SizedBox(height: 6),
+                        _signalSelector(),
+                        if (_isEdit) ...[
+                          const SizedBox(height: 14),
+                          _buildTokenStatusChip(),
+                        ],
+                        const SizedBox(height: 20),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: OutlinedButton(
+                                onPressed: () => Navigator.of(context).pop(),
+                                style: OutlinedButton.styleFrom(
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
+                                  side: const BorderSide(
+                                    color: Color(0xFFE5E7EB),
+                                  ),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                child: const Text(
+                                  'Cancel',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              flex: 2,
+                              child: ElevatedButton(
+                                onPressed: _submit,
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: const Color(0xFF7C3AED),
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    vertical: 12,
+                                  ),
+                                  elevation: 0,
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                child: Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(
+                                      _isEdit
+                                          ? Icons.save_rounded
+                                          : Icons.add_rounded,
+                                      size: 16,
+                                    ),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      _isEdit ? 'Save Changes' : 'Add Stock',
+                                      style: const TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w700,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTokenStatusChip() {
+    final hasToken = _symbolToken != null && _symbolToken!.isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        color: hasToken ? const Color(0xFFF0FDF4) : const Color(0xFFFFF7ED),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: hasToken ? const Color(0xFF6EE7B7) : const Color(0xFFFBBF24),
+        ),
+      ),
+      child: Row(
+        children: [
+          Icon(
+            hasToken
+                ? Icons.check_circle_outline_rounded
+                : Icons.warning_amber_rounded,
+            size: 14,
+            color: hasToken ? const Color(0xFF059669) : const Color(0xFFD97706),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              hasToken
+                  ? 'Symbol token: $_symbolToken  (auto-filled)'
+                  : 'No symbol token — search & select a stock above to update it',
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: hasToken
+                    ? const Color(0xFF059669)
+                    : const Color(0xFFD97706),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogHeader() {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF7C3AED), Color(0xFF9333EA)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.20),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              _isEdit ? Icons.edit_rounded : Icons.add_chart_rounded,
+              color: Colors.white,
+              size: 17,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Text(
+            widget.title,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const Spacer(),
+          InkWell(
+            onTap: () => Navigator.of(context).pop(),
+            child: Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.18),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: const Icon(
+                Icons.close_rounded,
+                color: Colors.white,
+                size: 16,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScripSearch() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            InkWell(
+              onTap: () {
+                setState(() {
+                  _exchange = _exchange == 'NSE' ? 'BSE' : 'NSE';
+                  if (_searchCtrl.text.length >= 2) {
+                    _onSearchChanged(_searchCtrl.text);
+                  }
+                });
+              },
+              child: Container(
+                height: 44,
+                width: 52,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFEEF2FF),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFC7D2FE)),
+                ),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      _exchange,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: Color(0xFF6366F1),
+                      ),
+                    ),
+                    const Icon(
+                      Icons.unfold_more_rounded,
+                      size: 11,
+                      color: Color(0xFF6366F1),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Container(
+                height: 44,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFAFAFC),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFFE5E7EB)),
+                ),
+                child: TextField(
+                  controller: _searchCtrl,
+                  focusNode: _searchFocus,
+                  onChanged: _onSearchChanged,
+                  style: const TextStyle(
+                    fontSize: 13,
+                    color: Color(0xFF111827),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  decoration: InputDecoration(
+                    hintText: 'Search symbol (e.g. INFY, SBIN...)',
+                    hintStyle: const TextStyle(
+                      fontSize: 12,
+                      color: Color(0xFF6B7280),
+                    ),
+                    prefixIcon: _searchLoading
+                        ? const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFF7C3AED),
+                              ),
+                            ),
+                          )
+                        : const Icon(
+                            Icons.search_rounded,
+                            size: 18,
+                            color: Color(0xFF6B7280),
+                          ),
+                    suffixIcon: _searchCtrl.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(
+                              Icons.close_rounded,
+                              size: 16,
+                              color: Color(0xFF6B7280),
+                            ),
+                            onPressed: () {
+                              _searchCtrl.clear();
+                              setState(() {
+                                _searchResults = [];
+                                _showDropdown = false;
+                              });
+                            },
+                          )
+                        : null,
+                    border: InputBorder.none,
+                    contentPadding: const EdgeInsets.symmetric(vertical: 13),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+        if (_showDropdown && _searchResults.isNotEmpty)
+          Container(
+            margin: const EdgeInsets.only(top: 4),
+            constraints: const BoxConstraints(maxHeight: 220),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFE5E7EB)),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.08),
+                  blurRadius: 12,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: ListView.separated(
+                padding: EdgeInsets.zero,
+                shrinkWrap: true,
+                itemCount: _searchResults.length,
+                separatorBuilder: (_, __) =>
+                    const Divider(height: 1, color: Color(0xFFE5E7EB)),
+                itemBuilder: (_, i) {
+                  final s = _searchResults[i];
+                  final displaySymbol = s.tradingSymbol
+                      .replaceAll('-EQ', '')
+                      .trim();
+                  return InkWell(
+                    onTap: () => _selectScrip(s),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 14,
+                        vertical: 10,
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 32,
+                            height: 32,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEDE9FE),
+                              borderRadius: BorderRadius.circular(8),
+                            ),
+                            child: Center(
+                              child: Text(
+                                displaySymbol.isNotEmpty
+                                    ? displaySymbol[0]
+                                    : '?',
+                                style: const TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w800,
+                                  color: Color(0xFF7C3AED),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  displaySymbol,
+                                  style: const TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w700,
+                                    color: Color(0xFF1F2937),
+                                  ),
+                                ),
+                                Text(
+                                  s.tradingSymbol,
+                                  style: const TextStyle(
+                                    fontSize: 11,
+                                    color: Color(0xFF6B7280),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 7,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFEEF2FF),
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              s.exchange,
+                              style: const TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Color(0xFF6366F1),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 6),
+                          Container(
+                            width: 26,
+                            height: 26,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFD1FAE5),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: const Icon(
+                              Icons.add_rounded,
+                              size: 15,
+                              color: Color(0xFF059669),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        if (_selectedScrip != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 6),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFFF5F3FF),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFFDDD6FE)),
+              ),
+              child: Row(
+                children: [
+                  const Icon(
+                    Icons.check_circle_rounded,
+                    size: 13,
+                    color: Color(0xFF7C3AED),
+                  ),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      '${_selectedScrip!.tradingSymbol} · ${_selectedScrip!.exchange}  —  price auto-filled from LTP',
+                      style: const TextStyle(
+                        fontSize: 11,
+                        color: Color(0xFF7C3AED),
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                  if (_ltpLoading)
+                    const SizedBox(
+                      width: 12,
+                      height: 12,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        color: Color(0xFF7C3AED),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _labelText(String text) => Text(
+    text,
+    style: const TextStyle(
+      fontSize: 10,
+      fontWeight: FontWeight.w700,
+      letterSpacing: 1.2,
+      color: Color(0xFF6B7280),
+    ),
+  );
+
+  Widget _field({
+    required String label,
+    required String hint,
+    required TextEditingController ctrl,
+    TextInputType keyboard = TextInputType.text,
+    List<TextInputFormatter>? formatters,
+    bool required = false,
+    Widget? suffix,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _labelText(label),
+        const SizedBox(height: 6),
+        TextFormField(
+          controller: ctrl,
+          keyboardType: keyboard,
+          inputFormatters: formatters,
+          style: const TextStyle(fontSize: 13, color: Color(0xFF1F2937)),
+          decoration: InputDecoration(
+            hintText: hint,
+            hintStyle: const TextStyle(fontSize: 12, color: Color(0xFFD1D5DB)),
+            suffixIcon: suffix != null
+                ? Padding(padding: const EdgeInsets.all(12), child: suffix)
+                : null,
+            filled: true,
+            fillColor: const Color(0xFFFAF9FF),
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 12,
+              vertical: 11,
+            ),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(
+                color: Color(0xFF7C3AED),
+                width: 1.5,
+              ),
+            ),
+            errorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFEF4444)),
+            ),
+            focusedErrorBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(
+                color: Color(0xFFEF4444),
+                width: 1.5,
+              ),
+            ),
+            errorStyle: const TextStyle(fontSize: 10),
+          ),
+          validator: required
+              ? (v) => (v == null || v.trim().isEmpty) ? 'Required' : null
+              : null,
+        ),
+      ],
+    );
+  }
+
+  Widget _directionToggle() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _labelText('DIRECTION'),
+        const SizedBox(height: 6),
+        Container(
+          height: 42,
+          decoration: BoxDecoration(
+            color: const Color(0xFFF9F9FF),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: const Color(0xFFE5E7EB)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: InkWell(
+                  onTap: () =>
+                      setState(() => _direction = HotStockDirection.UP),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: _direction == HotStockDirection.UP
+                          ? const Color(0xFF10B981)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.arrow_upward_rounded,
+                          size: 13,
+                          color: _direction == HotStockDirection.UP
+                              ? Colors.white
+                              : const Color(0xFF9CA3AF),
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          'UP',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: _direction == HotStockDirection.UP
+                                ? Colors.white
+                                : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: InkWell(
+                  onTap: () =>
+                      setState(() => _direction = HotStockDirection.DOWN),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.all(3),
+                    decoration: BoxDecoration(
+                      color: _direction == HotStockDirection.DOWN
+                          ? const Color(0xFFEF4444)
+                          : Colors.transparent,
+                      borderRadius: BorderRadius.circular(7),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.arrow_downward_rounded,
+                          size: 13,
+                          color: _direction == HotStockDirection.DOWN
+                              ? Colors.white
+                              : const Color(0xFF9CA3AF),
+                        ),
+                        const SizedBox(width: 3),
+                        Text(
+                          'DOWN',
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: _direction == HotStockDirection.DOWN
+                                ? Colors.white
+                                : const Color(0xFF9CA3AF),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _categorySelector() {
+    return Wrap(
+      spacing: 6,
+      runSpacing: 6,
+      children: HotStockCategory.values.map((cat) {
+        final sel = cat == _category;
+        return InkWell(
+          onTap: () => setState(() => _category = cat),
+          borderRadius: BorderRadius.circular(8),
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: sel
+                  ? const Color(0xFF7C3AED).withOpacity(0.10)
+                  : const Color(0xFFF9F9FF),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(
+                color: sel ? const Color(0xFF7C3AED) : const Color(0xFFE5E7EB),
+                width: sel ? 1.5 : 1,
+              ),
+            ),
+            child: Text(
+              cat.label,
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.w700,
+                color: sel ? const Color(0xFF7C3AED) : const Color(0xFF9CA3AF),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  Widget _signalSelector() {
+    const options = [
+      (HotStockSignal.BUY, Color(0xFF10B981)),
+      (HotStockSignal.STRONG_BUY, Color(0xFF7C3AED)),
+      (HotStockSignal.HOLD, Color(0xFFF59E0B)),
+      (HotStockSignal.SELL, Color(0xFFEF4444)),
+    ];
+    return Row(
+      children: options.map((opt) {
+        final (sig, color) = opt;
+        final sel = _signal == sig;
+        return Expanded(
+          child: Padding(
+            padding: EdgeInsets.only(right: sig == HotStockSignal.SELL ? 0 : 6),
+            child: InkWell(
+              onTap: () => setState(() => _signal = sig),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(vertical: 8),
+                decoration: BoxDecoration(
+                  color: sel
+                      ? color.withOpacity(0.12)
+                      : const Color(0xFFF9F9FF),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: sel ? color : const Color(0xFFE5E7EB),
+                    width: sel ? 1.5 : 1,
+                  ),
+                ),
+                child: Text(
+                  sig.label,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 9,
+                    fontWeight: FontWeight.w800,
+                    color: sel ? color : const Color(0xFF9CA3AF),
+                    letterSpacing: 0.3,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// _Shimmer
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _Shimmer extends StatefulWidget {
+  final double width;
+  final double height;
+  final double radius;
+  const _Shimmer({
+    required this.width,
+    required this.height,
+    required this.radius,
+  });
+
+  @override
+  State<_Shimmer> createState() => _ShimmerState();
+}
+
+class _ShimmerState extends State<_Shimmer>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  late Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    )..repeat(reverse: true);
+    _anim = Tween<double>(begin: 0.4, end: 0.9).animate(_ctrl);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) => Opacity(
+        opacity: _anim.value,
+        child: Container(
+          width: widget.width,
+          height: widget.height,
+          decoration: BoxDecoration(
+            color: const Color(0xFFEDE9FE),
+            borderRadius: BorderRadius.circular(widget.radius),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Small shared widgets
+// ─────────────────────────────────────────────────────────────────────────────
+
+class _ColLabel extends StatelessWidget {
+  final String text;
+  final bool right;
+  const _ColLabel(this.text, {this.right = false});
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      text,
+      textAlign: right ? TextAlign.right : TextAlign.left,
+      style: const TextStyle(
+        fontSize: 10,
+        fontWeight: FontWeight.w700,
+        color: Color(0xFF9B87E8),
+        letterSpacing: 0.8,
+      ),
+    );
+  }
+}
+
+class _Slide {
+  final List<Color> gradient;
+  final String title;
+  final String subtitle;
+  final String tag;
+  final IconData icon;
+  const _Slide({
+    required this.gradient,
+    required this.title,
+    required this.subtitle,
+    required this.tag,
+    required this.icon,
+  });
+}
+
+class _CarouselSlide extends StatelessWidget {
+  final _Slide slide;
+  const _CarouselSlide({required this.slide});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: slide.gradient,
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 8,
+                    vertical: 3,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.22),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(
+                    slide.tag,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  slide.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                    height: 1.2,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Text(
+                  slide.subtitle,
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.82),
+                    fontSize: 11,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Icon(slide.icon, color: Colors.white.withOpacity(0.18), size: 58),
+        ],
+      ),
+    );
+  }
+}

@@ -1,0 +1,18 @@
+server:
+  port: ${SERVER_PORT:8081}
+
+spring:
+  datasource:
+    url: ${LOCAL_DB_URL:jdbc:mysql://localhost:3306/py_local?useSSL=false&serverTimezone=UTC&allowPublicKeyRetrieval=true}
+    username: ${LOCAL_DB_USERNAME:root}
+    password: ${LOCAL_DB_PASSWORD:admin}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+
+trading:
+  paper-trading:
+    enabled: ${PAPER_TRADING_ENABLED:true}
