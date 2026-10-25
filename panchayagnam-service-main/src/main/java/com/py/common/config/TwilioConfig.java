@@ -14,7 +14,9 @@ public class TwilioConfig {
 
     private static final Logger log = LoggerFactory.getLogger(TwilioConfig.class);
 
-    // Changed property keys to standard lowercase kebab-case
+    @Value("${twilio.auth-token:}")
+    private String authToken;
+
     @Value("${twilio.api-key-sid:}")
     private String apiKeySid;
 
@@ -27,22 +29,37 @@ public class TwilioConfig {
     @Value("${twilio.enabled:false}")
     private boolean twilioEnabled;
 
+    private boolean initialized = false;
+
+    public boolean isInitialized() {
+        return initialized;
+    }
+
     @PostConstruct
     public void initTwilio() {
-        if (twilioEnabled && isNotEmpty(apiKeySid) && isNotEmpty(apiSecret) && isNotEmpty(accountSid)) {
+        if (!twilioEnabled) {
+            log.info("Twilio OTP service is disabled (twilio.enabled=false).");
+            return;
+        }
 
-            // Crucial Debug Log: Verify string format prefixes before initializing
+        if (isNotEmpty(accountSid) && isNotEmpty(authToken)) {
+            // Standard Auth: Account SID + Auth Token
+            log.info("Initializing Twilio with Account SID starting with: {} using Auth Token",
+                    accountSid.substring(0, Math.min(accountSid.length(), 6)));
+            Twilio.init(accountSid.trim(), authToken.trim());
+            initialized = true;
+            log.info("Twilio SDK initialized successfully using standard Account SID + Auth Token");
+        } else if (isNotEmpty(apiKeySid) && isNotEmpty(apiSecret) && isNotEmpty(accountSid)) {
+            // API Key architecture: Key SID + Secret + Account SID
             log.info("Initializing Twilio with Account SID starting with: {}, Key SID starting with: {}",
                     accountSid.substring(0, Math.min(accountSid.length(), 6)),
                     apiKeySid.substring(0, Math.min(apiKeySid.length(), 6)));
-
-            // Explicitly map: Username (Key SID), Password (Secret Key), Account Context (Account SID)
-            Twilio.init(apiKeySid, apiSecret, accountSid);
-
+            Twilio.init(apiKeySid.trim(), apiSecret.trim(), accountSid.trim());
+            initialized = true;
             log.info("Twilio SDK initialized successfully using API Key architecture");
         } else {
-            log.warn("Twilio SDK NOT initialized — twilioEnabled={}, hasAccountSid={}, hasKeySid={}, hasSecret={}",
-                    twilioEnabled, isNotEmpty(accountSid), isNotEmpty(apiKeySid), isNotEmpty(apiSecret));
+            log.warn("Twilio SDK NOT initialized - twilioEnabled={}, hasAccountSid={}, hasAuthToken={}, hasKeySid={}, hasSecret={}",
+                    twilioEnabled, isNotEmpty(accountSid), isNotEmpty(authToken), isNotEmpty(apiKeySid), isNotEmpty(apiSecret));
         }
     }
 

@@ -39,6 +39,7 @@ smartapi:
 
 twilio:
   account-sid: ${TWILIO_ACCOUNT_SID:dummy_account_sid}
+  auth-token: ${TWILIO_AUTH_TOKEN:}
   api-key-sid: ${TWILIO_API_KEY_SID:dummy_api_key_sid}
   api-secret: ${TWILIO_API_SECRET:dummy_api_secret}
   service-sid: ${TWILIO_SERVICE_SID:dummy_service_sid}

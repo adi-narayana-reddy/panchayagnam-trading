@@ -56,7 +56,7 @@ public class PyUserController {
             log.error("Send OTP failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
-                    .body(PyApiResponseDto.failure("Failed to send OTP"));
+                    .body(PyApiResponseDto.failure(e.getMessage() != null ? e.getMessage() : "Failed to send OTP"));
         }
     }
 
@@ -90,7 +90,7 @@ public class PyUserController {
             log.error("Registration failed for email={}: {}", requestDto.getEmail(), e.getMessage(), e);
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
-                    .body(PyApiResponseDto.failure("Registration failed"));
+                    .body(PyApiResponseDto.failure(e.getMessage() != null ? e.getMessage() : "Registration failed"));
         }
     }
 
@@ -156,7 +156,7 @@ public class PyUserController {
             log.error("Reset MPIN failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
-                    .body(PyApiResponseDto.failure("Failed to reset MPIN"));
+                    .body(PyApiResponseDto.failure(e.getMessage() != null ? e.getMessage() : "Failed to reset MPIN"));
         }
     }
 

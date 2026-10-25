@@ -1,5 +1,5 @@
+import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'package:http/http.dart' as http;
 import '../constants/api_url_constants.dart';
 import '../constants/auth_header_helper.dart';
@@ -21,18 +21,27 @@ class ServiceClass {
     required String phoneNumber,
     required String codeReqFor,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/pyauth/send-otp'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phoneNumber': phoneNumber, "codeReqFor": codeReqFor}),
-    );
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/api/v1/pyauth/send-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phoneNumber': phoneNumber, "codeReqFor": codeReqFor}),
+      ).timeout(_timeout);
 
-    final data = jsonDecode(response.body);
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      if (data['success'] == true) return data;
-      throw Exception(data['message'] ?? 'Failed to send OTP');
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (data['success'] == true) return data;
+        throw Exception(data['message'] ?? 'Failed to send OTP');
+      }
+      throw Exception(data['message'] ?? 'Failed to send OTP (${response.statusCode})');
+    } on TimeoutException {
+      throw Exception('Server request timed out. Please try again later.');
+    } catch (e) {
+      if (e is Exception && !e.toString().contains('ClientException') && !e.toString().contains('XMLHttpRequest')) {
+        rethrow;
+      }
+      throw Exception('Unable to reach Panchayagnam server. Please verify your connection.');
     }
-    throw Exception(data['message'] ?? 'Failed to send OTP');
   }
 
   Future<List<DematAccount>> fetchDematAccountsByBrokerId(
@@ -64,24 +73,33 @@ class ServiceClass {
     required String mpin,
     required String otp,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/pyauth/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({
-        'fullName': fullName,
-        'email': email,
-        'phoneNumber': phoneNumber,
-        'mpin': mpin,
-        'otp': otp,
-      }),
-    );
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/api/v1/pyauth/register'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'fullName': fullName,
+          'email': email,
+          'phoneNumber': phoneNumber,
+          'mpin': mpin,
+          'otp': otp,
+        }),
+      ).timeout(_timeout);
 
-    final data = jsonDecode(response.body);
-    if (response.statusCode == 200 || response.statusCode == 201) {
-      if (data['success'] == true) return data;
-      throw Exception(data['message'] ?? 'Registration failed');
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        if (data['success'] == true) return data;
+        throw Exception(data['message'] ?? 'Registration failed');
+      }
+      throw Exception(data['message'] ?? 'Registration failed (${response.statusCode})');
+    } on TimeoutException {
+      throw Exception('Server request timed out. Please try again later.');
+    } catch (e) {
+      if (e is Exception && !e.toString().contains('ClientException') && !e.toString().contains('XMLHttpRequest')) {
+        rethrow;
+      }
+      throw Exception('Unable to reach Panchayagnam server. Please verify your connection.');
     }
-    throw Exception(data['message'] ?? 'Registration failed');
   }
 
   Future<Map<String, dynamic>> login({

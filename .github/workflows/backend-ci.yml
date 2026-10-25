@@ -21,6 +21,10 @@ jobs:
           java-version: '17'
           cache: 'maven'
 
+      - name: Run Core Service Unit Tests
+        working-directory: ./panchayagnam-service-main
+        run: mvn test -Dtest=TwilioOtpServiceTest -B
+
       - name: Build Panchayagnam Core Service
         working-directory: ./panchayagnam-service-main
         run: mvn clean package -DskipTests -B

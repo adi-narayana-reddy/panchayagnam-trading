@@ -184,8 +184,7 @@ public class PyUserServiceImpl implements PyUserService {
         }
 
         try {
-            // Send OTP using TwilioOtpService (Twilio-specific logic resides inside
-            // service)
+            // Send OTP using TwilioOtpService (Twilio-specific logic resides inside service)
             // Use custom-message sender so SMS body can be branded/customized
             boolean otpSent = twilioOtpService.sendOtpV2(requestDto.getPhoneNumber(), requestDto.getCodeReqFor());
 
@@ -197,9 +196,15 @@ public class PyUserServiceImpl implements PyUserService {
                 logger.error("Failed to send OTP for phone: " + maskPhoneNumber(requestDto.getPhoneNumber()));
                 throw new RuntimeException("Failed to send OTP. Please try again later.");
             }
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            logger.warn("Validation/configuration issue sending OTP: {}", e.getMessage());
+            throw new RuntimeException(e.getMessage());
+        } catch (RuntimeException e) {
+            logger.error("Error sending OTP for registration: {}", e.getMessage());
+            throw e;
         } catch (Exception e) {
-            logger.error("Error sending OTP for registration", e);
-            throw new RuntimeException("Error sending OTP: " + e.getMessage());
+            logger.error("Unexpected error sending OTP for registration", e);
+            throw new RuntimeException("Failed to send OTP: " + e.getMessage());
         }
     }
 

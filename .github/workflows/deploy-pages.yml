@@ -46,8 +46,10 @@ jobs:
 
       - name: Build Flutter Web Release
         working-directory: ./panchayagnam-ui-main
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://api.panchayagnam.com' }}
         run: |
-          flutter build web --release --base-href /${{ github.event.repository.name }}/
+          flutter build web --release --base-href /${{ github.event.repository.name }}/ --dart-define=API_BASE_URL=${API_BASE_URL}
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v4
