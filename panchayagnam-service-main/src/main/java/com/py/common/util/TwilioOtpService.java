@@ -277,29 +277,39 @@ public class TwilioOtpService {
     }
 
     private boolean isDemoNumberAllowed(String formattedPhone) {
-        if (demoAllowedNumbers == null || demoAllowedNumbers.trim().isEmpty() || formattedPhone == null) {
-            return false;
-        }
-        // Extract digits only from the requested phone (must be at least 10 digits)
-        String reqDigits = formattedPhone.replaceAll("[^0-9]", "");
-        if (reqDigits.length() < 10) {
-            return false;
-        }
-        String reqLast10 = reqDigits.substring(reqDigits.length() - 10);
+        String canonicalRequested = normalizeToCanonical(formattedPhone);
+        int incomingDigitCount = (formattedPhone != null) ? formattedPhone.replaceAll("[^0-9]", "").length() : 0;
 
-        // Split by comma, semicolon, or whitespace
+        if (demoAllowedNumbers == null || demoAllowedNumbers.trim().isEmpty()) {
+            logger.warn("Demo OTP check: demoMode={}, allowlistEntries=0, incomingDigitCount={}, matched=false (DEMO_OTP_ALLOWED_NUMBERS is not configured or empty)",
+                    demoOtpEnabled, incomingDigitCount);
+            return false;
+        }
+
         String[] parts = demoAllowedNumbers.split("[,;\\s]+");
+        int validAllowlistCount = 0;
+        boolean matched = false;
+
         for (String part : parts) {
-            String cleanPart = part.replaceAll("[^0-9]", "");
-            if (cleanPart.length() < 10) {
-                continue; // Ignore any malformed or short entry in allowed list
+            String trimmedPart = part.trim();
+            if (trimmedPart.isEmpty()) {
+                continue;
             }
-            String allowedLast10 = cleanPart.substring(cleanPart.length() - 10);
-            if (allowedLast10.equals(reqLast10)) {
-                return true;
+            String canonicalAllowed = normalizeToCanonical(trimmedPart);
+            if (canonicalAllowed != null) {
+                validAllowlistCount++;
+                if (canonicalRequested != null && canonicalAllowed.equals(canonicalRequested)) {
+                    matched = true;
+                }
+            } else {
+                logger.warn("Demo allowlist entry ignored: invalid format (length={})", trimmedPart.length());
             }
         }
-        return false;
+
+        logger.info("Demo OTP check: demoMode={}, allowlistEntries={}, incomingDigitCount={}, matched={}",
+                demoOtpEnabled, validAllowlistCount, incomingDigitCount, matched);
+
+        return matched;
     }
 
     private String generateOtp() {
@@ -309,46 +319,65 @@ public class TwilioOtpService {
 
     // -------------------- Phone Number Formatting & Validation --------------------
     /**
-     * Formats phone numbers to standard E.164 (+[country code][subscriber number]).
-     * Default country code is +91 (India) for 10-digit numbers.
+     * Canonicalizes and validates phone numbers.
+     * Indian 10-digit mobile numbers (starting with 6, 7, 8, 9) are canonically formatted to +91XXXXXXXXXX.
+     * International E.164 numbers are validated and preserved.
+     * Strips whitespace, quotes, dashes, dots, and parentheses.
+     *
+     * @param phoneNumber input phone number in any supported format
+     * @return canonical E.164 phone string (e.g. +91XXXXXXXXXX), or null if invalid
      */
-    public static String formatPhoneNumber(String phoneNumber) {
+    public static String normalizeToCanonical(String phoneNumber) {
         if (phoneNumber == null) {
             return null;
         }
-        String cleaned = phoneNumber.trim().replaceAll("[\\s\\-\\(\\)]", "");
+        String cleaned = phoneNumber.trim().replaceAll("[\"\'\\s\\-\\(\\)\\.]", "");
         if (cleaned.isEmpty()) {
             return null;
         }
 
-        // Already in E.164 format with leading +
-        if (cleaned.startsWith("+")) {
-            String digits = cleaned.substring(1).replaceAll("[^0-9]", "");
-            if (digits.length() >= 10 && digits.length() <= 15) {
-                return "+" + digits;
-            }
-            return null; // Invalid length for E.164
+        boolean hasPlus = cleaned.startsWith("+");
+        String digits = hasPlus ? cleaned.substring(1) : cleaned;
+
+        if (!digits.matches("^\\d+$")) {
+            return null;
         }
 
-        // Numbers without leading +
-        String digits = cleaned.replaceAll("[^0-9]", "");
-        if (digits.length() == 10) {
-            // Standard Indian 10-digit mobile
+        // Case 1: Exactly 10 digits - Indian mobile (must start with 6, 7, 8, or 9)
+        if (digits.length() == 10 && digits.matches("^[6-9]\\d{9}$")) {
             return "+91" + digits;
         }
+
+        // Case 2: 12 digits starting with 91 - Indian mobile with country code (91[6-9]\d{9})
         if (digits.length() == 12 && digits.startsWith("91")) {
-            // Indian number with 91 prefix but no +
-            return "+" + digits;
+            String sub = digits.substring(2);
+            if (sub.matches("^[6-9]\\d{9}$")) {
+                return "+91" + sub;
+            }
         }
-        if (digits.length() == 11 && digits.startsWith("1")) {
-            // US/Canada number with 1 prefix but no +
-            return "+" + digits;
+
+        // Case 3: 11 digits starting with 0 - Indian mobile with trunk prefix (0[6-9]\d{9})
+        if (digits.length() == 11 && digits.startsWith("0")) {
+            String sub = digits.substring(1);
+            if (sub.matches("^[6-9]\\d{9}$")) {
+                return "+91" + sub;
+            }
         }
-        if (digits.length() > 10 && digits.length() <= 15) {
+
+        // Case 4: Valid international E.164 number with leading + (10 to 15 digits)
+        if (hasPlus && digits.length() >= 10 && digits.length() <= 15) {
             return "+" + digits;
         }
 
-        return null; // Too short or invalid
+        return null;
+    }
+
+    /**
+     * Formats phone numbers to standard E.164 (+[country code][subscriber number]).
+     * Delegates to normalizeToCanonical.
+     */
+    public static String formatPhoneNumber(String phoneNumber) {
+        return normalizeToCanonical(phoneNumber);
     }
 
     private static String maskPhoneNumber(String phoneNumber) {
