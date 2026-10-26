@@ -104,14 +104,22 @@ public class TwilioOtpService {
                     throw new IllegalArgumentException("Demo mode requires a valid 10-digit Indian mobile number.");
                 }
 
+                String rawCode = getRawDemoOtpCode();
                 String activeCode = getDemoOtpCode();
-                if (activeCode == null || !activeCode.trim().matches("^\\d{6}$")) {
-                    logger.error("Demo OTP is enabled on server, but DEMO_OTP_CODE is not configured as exactly 6 digits.");
+                boolean is6Digits = activeCode.matches("^[0-9]{6}$");
+
+                logger.info("Demo OTP code check: present={}, rawCharCount={}, cleanedCharCount={}, matchesNumeric6={}",
+                        !rawCode.isEmpty(), rawCode.length(), activeCode.length(), is6Digits);
+
+                if (!is6Digits) {
+                    logger.error("Demo OTP configuration rejected: present={}, rawCharCount={}, cleanedCharCount={}, matchesNumeric6=false",
+                            !rawCode.isEmpty(), rawCode.length(), activeCode.length());
                     throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
                 }
+
                 int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
                 Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
-                otpStore.put(formatted, new OtpEntry(activeCode.trim(), expiresAt, codeReqFor));
+                otpStore.put(formatted, new OtpEntry(activeCode, expiresAt, codeReqFor));
                 logger.info("Demo verification initiated for number: {}", maskPhoneNumber(formatted));
                 return true;
             }
@@ -304,7 +312,7 @@ public class TwilioOtpService {
         return "";
     }
 
-    public String getDemoOtpCode() {
+    public String getRawDemoOtpCode() {
         if (demoOtpCode != null && !demoOtpCode.trim().isEmpty()) {
             return demoOtpCode.trim();
         }
@@ -317,6 +325,30 @@ public class TwilioOtpService {
             return env2.trim();
         }
         return "";
+    }
+
+    /**
+     * Cleans the configured demo OTP code:
+     * 1. Trims leading and trailing whitespace.
+     * 2. Removes surrounding quotes only when they form a matching pair around the entire value ("..." or '...').
+     * 3. Preserves internal spaces, internal quotes, letters, and other characters.
+     */
+    public static String cleanDemoOtpCode(String code) {
+        if (code == null) {
+            return "";
+        }
+        String cleaned = code.trim();
+        if (cleaned.length() >= 2) {
+            if ((cleaned.startsWith("\"") && cleaned.endsWith("\"")) ||
+                (cleaned.startsWith("'") && cleaned.endsWith("'"))) {
+                cleaned = cleaned.substring(1, cleaned.length() - 1).trim();
+            }
+        }
+        return cleaned;
+    }
+
+    public String getDemoOtpCode() {
+        return cleanDemoOtpCode(getRawDemoOtpCode());
     }
 
     private boolean isDemoNumberAllowed(String formattedPhone) {

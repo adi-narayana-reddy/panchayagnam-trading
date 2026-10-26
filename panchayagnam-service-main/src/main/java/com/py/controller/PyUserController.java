@@ -35,7 +35,7 @@ public class PyUserController {
     public ResponseEntity<java.util.Map<String, Object>> getDemoStatus() {
         java.util.Map<String, Object> status = new java.util.LinkedHashMap<>();
         status.put("status", "UP");
-        status.put("version", "2026-10-26-any-10digit-demo");
+        status.put("version", "2026-10-26-otp-clean-and-diagnostics");
         status.put("twilioEnabled", twilioOtpService.isTwilioEnabled());
         status.put("demoOtpEnabled", twilioOtpService.isDemoOtpEnabled());
         status.put("allowlistConfigured", !twilioOtpService.getAllowedNumbers().trim().isEmpty());
