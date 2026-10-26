@@ -112,7 +112,10 @@ public class TwilioOtpService {
                     return true;
                 } else {
                     logger.warn("Demo OTP request rejected: incoming number is not in DEMO_OTP_ALLOWED_NUMBERS list.");
-                    throw new IllegalStateException("This number is not authorized for demo mode. Please contact the administrator.");
+                    if (getAllowedNumbers().trim().isEmpty()) {
+                        throw new IllegalStateException("This number is not authorized for demo mode (DEMO_OTP_ALLOWED_NUMBERS is not configured or empty on server). Please contact the administrator.");
+                    }
+                    throw new IllegalStateException("This number is not authorized for demo mode (number not in allowlist). Please contact the administrator.");
                 }
             }
 
@@ -330,7 +333,7 @@ public class TwilioOtpService {
             return false;
         }
 
-        String[] parts = allowedConfig.split("[,;\\s]+");
+        String[] parts = allowedConfig.split("[,;\\r\\n]+");
         int validAllowlistCount = 0;
         boolean matched = false;
 
@@ -347,7 +350,26 @@ public class TwilioOtpService {
                     break;
                 }
             } else {
-                logger.warn("Demo allowlist entry ignored: invalid format (length={})", trimmedPart.length());
+                // If trimmedPart could not be normalized as a single number (e.g. space-separated list without commas),
+                // check if it contains multiple whitespace-delimited numbers
+                String[] subParts = trimmedPart.split("\\s+");
+                if (subParts.length > 1) {
+                    for (String subPart : subParts) {
+                        String canonicalSub = normalizeToCanonical(subPart);
+                        if (canonicalSub != null) {
+                            validAllowlistCount++;
+                            if (canonicalRequested != null && canonicalSub.equals(canonicalRequested)) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (matched) {
+                        break;
+                    }
+                } else {
+                    logger.warn("Demo allowlist entry ignored: invalid format (length={})", trimmedPart.length());
+                }
             }
         }
 

@@ -65,6 +65,7 @@ public class PySecurityConfig {
                                 "/api/v1/pyauth/login",
                                 "/api/v1/pyauth/register",
                                 "/api/v1/pyauth/send-otp",
+                                "/api/v1/pyauth/demo-status",
                                 "/api/v1/pyauth/reset-mpin",
                                 "/profitmart/oauth/callback"
                         ).permitAll()

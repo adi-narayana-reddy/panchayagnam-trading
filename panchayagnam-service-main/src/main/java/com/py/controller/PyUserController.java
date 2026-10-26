@@ -27,6 +27,22 @@ public class PyUserController {
     @Autowired
     private PyUserService pyUserService;
 
+    @Autowired
+    private com.py.common.util.TwilioOtpService twilioOtpService;
+
+    @GetMapping("/demo-status")
+    @Operation(summary = "Check Demo OTP System Status", description = "Safe diagnostic endpoint to verify demo mode configuration")
+    public ResponseEntity<java.util.Map<String, Object>> getDemoStatus() {
+        java.util.Map<String, Object> status = new java.util.LinkedHashMap<>();
+        status.put("status", "UP");
+        status.put("version", "2026-10-26-final-check");
+        status.put("twilioEnabled", twilioOtpService.isTwilioEnabled());
+        status.put("demoOtpEnabled", twilioOtpService.isDemoOtpEnabled());
+        status.put("allowlistConfigured", !twilioOtpService.getAllowedNumbers().trim().isEmpty());
+        status.put("codeConfigured", !twilioOtpService.getDemoOtpCode().trim().isEmpty());
+        return ResponseEntity.ok(status);
+    }
+
     // ── ✅ NEW: SEND OTP FOR REGISTRATION ────────────────────────────────────
     @PostMapping("/send-otp")
     @Operation(
