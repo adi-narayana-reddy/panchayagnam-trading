@@ -98,19 +98,20 @@ public class TwilioOtpService {
 
         // 2. Twilio service enablement check & safe demo OTP handling
         if (!twilioEnabled) {
-            if (demoOtpEnabled) {
+            if (isDemoOtpEnabled()) {
                 if (isDemoNumberAllowed(formatted)) {
-                    if (demoOtpCode == null || !demoOtpCode.trim().matches("^\\d{6}$")) {
+                    String activeCode = getDemoOtpCode();
+                    if (activeCode == null || !activeCode.trim().matches("^\\d{6}$")) {
                         logger.error("Demo OTP is enabled on server, but DEMO_OTP_CODE is not configured as exactly 6 digits.");
                         throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
                     }
                     int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
                     Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
-                    otpStore.put(formatted, new OtpEntry(demoOtpCode.trim(), expiresAt, codeReqFor));
+                    otpStore.put(formatted, new OtpEntry(activeCode.trim(), expiresAt, codeReqFor));
                     logger.info("Demo verification initiated for authorized test number: {}", maskPhoneNumber(formatted));
                     return true;
                 } else {
-                    logger.warn("Demo OTP request rejected: phone {} is not in DEMO_OTP_ALLOWED_NUMBERS list.", maskPhoneNumber(formatted));
+                    logger.warn("Demo OTP request rejected: incoming number is not in DEMO_OTP_ALLOWED_NUMBERS list.");
                     throw new IllegalStateException("This number is not authorized for demo mode. Please contact the administrator.");
                 }
             }
@@ -273,20 +274,63 @@ public class TwilioOtpService {
     }
 
     public boolean isDemoOtpEnabled() {
-        return demoOtpEnabled;
+        if (demoOtpEnabled) {
+            return true;
+        }
+        String env1 = System.getenv("DEMO_OTP_ENABLED");
+        if ("true".equalsIgnoreCase(env1)) {
+            return true;
+        }
+        String env2 = System.getenv("APP_DEMO_OTP_ENABLED");
+        return "true".equalsIgnoreCase(env2);
+    }
+
+    public String getAllowedNumbers() {
+        if (demoAllowedNumbers != null && !demoAllowedNumbers.trim().isEmpty()) {
+            return demoAllowedNumbers.trim();
+        }
+        String env1 = System.getenv("DEMO_OTP_ALLOWED_NUMBERS");
+        if (env1 != null && !env1.trim().isEmpty()) {
+            return env1.trim();
+        }
+        String env2 = System.getenv("APP_DEMO_OTP_ALLOWED_NUMBERS");
+        if (env2 != null && !env2.trim().isEmpty()) {
+            return env2.trim();
+        }
+        String env3 = System.getenv("DEMO_OTP_ALLOWED_NUMBER");
+        if (env3 != null && !env3.trim().isEmpty()) {
+            return env3.trim();
+        }
+        return "";
+    }
+
+    public String getDemoOtpCode() {
+        if (demoOtpCode != null && !demoOtpCode.trim().isEmpty()) {
+            return demoOtpCode.trim();
+        }
+        String env1 = System.getenv("DEMO_OTP_CODE");
+        if (env1 != null && !env1.trim().isEmpty()) {
+            return env1.trim();
+        }
+        String env2 = System.getenv("APP_DEMO_OTP_CODE");
+        if (env2 != null && !env2.trim().isEmpty()) {
+            return env2.trim();
+        }
+        return "";
     }
 
     private boolean isDemoNumberAllowed(String formattedPhone) {
+        String allowedConfig = getAllowedNumbers();
         String canonicalRequested = normalizeToCanonical(formattedPhone);
-        int incomingDigitCount = (formattedPhone != null) ? formattedPhone.replaceAll("[^0-9]", "").length() : 0;
+        String reqDigits = (formattedPhone != null) ? formattedPhone.replaceAll("[^0-9]", "") : "";
 
-        if (demoAllowedNumbers == null || demoAllowedNumbers.trim().isEmpty()) {
-            logger.warn("Demo OTP check: demoMode={}, allowlistEntries=0, incomingDigitCount={}, matched=false (DEMO_OTP_ALLOWED_NUMBERS is not configured or empty)",
-                    demoOtpEnabled, incomingDigitCount);
+        if (allowedConfig == null || allowedConfig.trim().isEmpty()) {
+            logger.warn("Demo OTP check: demoMode={}, allowlistEntries=0, incomingDigits={}, matched=false (DEMO_OTP_ALLOWED_NUMBERS is not configured or empty on server)",
+                    isDemoOtpEnabled(), reqDigits.length());
             return false;
         }
 
-        String[] parts = demoAllowedNumbers.split("[,;\\s]+");
+        String[] parts = allowedConfig.split("[,;\\s]+");
         int validAllowlistCount = 0;
         boolean matched = false;
 
@@ -300,14 +344,15 @@ public class TwilioOtpService {
                 validAllowlistCount++;
                 if (canonicalRequested != null && canonicalAllowed.equals(canonicalRequested)) {
                     matched = true;
+                    break;
                 }
             } else {
                 logger.warn("Demo allowlist entry ignored: invalid format (length={})", trimmedPart.length());
             }
         }
 
-        logger.info("Demo OTP check: demoMode={}, allowlistEntries={}, incomingDigitCount={}, matched={}",
-                demoOtpEnabled, validAllowlistCount, incomingDigitCount, matched);
+        logger.info("Demo OTP check: demoMode={}, allowlistEntries={}, incomingDigits={}, matched={}",
+                isDemoOtpEnabled(), validAllowlistCount, reqDigits.length(), matched);
 
         return matched;
     }
@@ -320,8 +365,9 @@ public class TwilioOtpService {
     // -------------------- Phone Number Formatting & Validation --------------------
     /**
      * Canonicalizes and validates phone numbers.
-     * Indian 10-digit mobile numbers (starting with 6, 7, 8, 9) are canonically formatted to +91XXXXXXXXXX.
-     * International E.164 numbers are validated and preserved.
+     * Any 10-digit number is canonically formatted to +91XXXXXXXXXX.
+     * Numbers with +91, 91, or trunk 0 prefixes are also normalized to +91XXXXXXXXXX.
+     * International E.164 numbers (+...) are validated and preserved.
      * Strips whitespace, quotes, dashes, dots, and parentheses.
      *
      * @param phoneNumber input phone number in any supported format
@@ -343,25 +389,19 @@ public class TwilioOtpService {
             return null;
         }
 
-        // Case 1: Exactly 10 digits - Indian mobile (must start with 6, 7, 8, or 9)
-        if (digits.length() == 10 && digits.matches("^[6-9]\\d{9}$")) {
+        // Case 1: Exactly 10 digits - standard Indian mobile / test number
+        if (digits.length() == 10) {
             return "+91" + digits;
         }
 
-        // Case 2: 12 digits starting with 91 - Indian mobile with country code (91[6-9]\d{9})
+        // Case 2: 12 digits starting with 91 - Indian mobile with country code (91XXXXXXXXXX)
         if (digits.length() == 12 && digits.startsWith("91")) {
-            String sub = digits.substring(2);
-            if (sub.matches("^[6-9]\\d{9}$")) {
-                return "+91" + sub;
-            }
+            return "+" + digits;
         }
 
-        // Case 3: 11 digits starting with 0 - Indian mobile with trunk prefix (0[6-9]\d{9})
+        // Case 3: 11 digits starting with 0 - Indian mobile with trunk prefix (0XXXXXXXXXX)
         if (digits.length() == 11 && digits.startsWith("0")) {
-            String sub = digits.substring(1);
-            if (sub.matches("^[6-9]\\d{9}$")) {
-                return "+91" + sub;
-            }
+            return "+91" + digits.substring(1);
         }
 
         // Case 4: Valid international E.164 number with leading + (10 to 15 digits)
