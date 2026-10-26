@@ -35,13 +35,13 @@ public class TwilioOtpService {
     @Value("${twilio.otp-expiry-minutes:5}")
     private int otpExpiryMinutes;
 
-    @Value("${app.demo-otp.enabled:false}")
+    @Value("${app.demo-otp.enabled:${DEMO_OTP_ENABLED:false}}")
     private boolean demoOtpEnabled;
 
-    @Value("${app.demo-otp.allowed-numbers:}")
+    @Value("${app.demo-otp.allowed-numbers:${DEMO_OTP_ALLOWED_NUMBERS:}}")
     private String demoAllowedNumbers;
 
-    @Value("${app.demo-otp.code:}")
+    @Value("${app.demo-otp.code:${DEMO_OTP_CODE:}}")
     private String demoOtpCode;
 
     // Rate Limiting constants
@@ -98,16 +98,21 @@ public class TwilioOtpService {
 
         // 2. Twilio service enablement check & safe demo OTP handling
         if (!twilioEnabled) {
-            if (demoOtpEnabled && isDemoNumberAllowed(formatted)) {
-                if (demoOtpCode == null || !demoOtpCode.trim().matches("^\\d{6}$")) {
-                    logger.error("Demo OTP is enabled on server, but app.demo-otp.code is not configured as exactly 6 digits.");
-                    throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
+            if (demoOtpEnabled) {
+                if (isDemoNumberAllowed(formatted)) {
+                    if (demoOtpCode == null || !demoOtpCode.trim().matches("^\\d{6}$")) {
+                        logger.error("Demo OTP is enabled on server, but DEMO_OTP_CODE is not configured as exactly 6 digits.");
+                        throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
+                    }
+                    int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
+                    Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
+                    otpStore.put(formatted, new OtpEntry(demoOtpCode.trim(), expiresAt, codeReqFor));
+                    logger.info("Demo verification initiated for authorized test number: {}", maskPhoneNumber(formatted));
+                    return true;
+                } else {
+                    logger.warn("Demo OTP request rejected: phone {} is not in DEMO_OTP_ALLOWED_NUMBERS list.", maskPhoneNumber(formatted));
+                    throw new IllegalStateException("This number is not authorized for demo mode. Please contact the administrator.");
                 }
-                int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
-                Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
-                otpStore.put(formatted, new OtpEntry(demoOtpCode.trim(), expiresAt, codeReqFor));
-                logger.info("Demo verification initiated for authorized test number: {}", maskPhoneNumber(formatted));
-                return true;
             }
 
             logger.warn("Twilio OTP service is disabled (twilio.enabled=false). Phone: {}", maskPhoneNumber(formatted));
@@ -275,10 +280,22 @@ public class TwilioOtpService {
         if (demoAllowedNumbers == null || demoAllowedNumbers.trim().isEmpty() || formattedPhone == null) {
             return false;
         }
-        String[] parts = demoAllowedNumbers.split(",");
+        // Extract digits only from the requested phone (must be at least 10 digits)
+        String reqDigits = formattedPhone.replaceAll("[^0-9]", "");
+        if (reqDigits.length() < 10) {
+            return false;
+        }
+        String reqLast10 = reqDigits.substring(reqDigits.length() - 10);
+
+        // Split by comma, semicolon, or whitespace
+        String[] parts = demoAllowedNumbers.split("[,;\\s]+");
         for (String part : parts) {
-            String allowed = formatPhoneNumber(part.trim());
-            if (allowed != null && allowed.equals(formattedPhone)) {
+            String cleanPart = part.replaceAll("[^0-9]", "");
+            if (cleanPart.length() < 10) {
+                continue; // Ignore any malformed or short entry in allowed list
+            }
+            String allowedLast10 = cleanPart.substring(cleanPart.length() - 10);
+            if (allowedLast10.equals(reqLast10)) {
                 return true;
             }
         }

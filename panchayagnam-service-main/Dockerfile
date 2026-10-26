@@ -30,4 +30,4 @@ ENV PORT=8083 \
 
 EXPOSE 8083
 
-ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar --server.port=${PORT:-8083} --spring.profiles.active=${SPRING_PROFILES_ACTIVE:-h2} --spring.h2.console.enabled=false --twilio.enabled=${TWILIO_ENABLED:-false} --trading.paper-trading.enabled=${PAPER_TRADING_ENABLED:-true} --app.scrip-master.enabled=false --app.demo-otp.enabled=${DEMO_OTP_ENABLED:-false} --app.demo-otp.allowed-numbers=${DEMO_OTP_ALLOWED_NUMBERS:-} --app.demo-otp.code=${DEMO_OTP_CODE:-}"]
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar --server.port=${PORT:-8083} --spring.profiles.active=${SPRING_PROFILES_ACTIVE:-h2} --spring.h2.console.enabled=false --twilio.enabled=${TWILIO_ENABLED:-false} --trading.paper-trading.enabled=${PAPER_TRADING_ENABLED:-true} --app.scrip-master.enabled=false \"--app.demo-otp.enabled=${DEMO_OTP_ENABLED:-false}\" \"--app.demo-otp.allowed-numbers=${DEMO_OTP_ALLOWED_NUMBERS:-}\" \"--app.demo-otp.code=${DEMO_OTP_CODE:-}\""]
