@@ -177,10 +177,22 @@ public class PyUserServiceImpl implements PyUserService {
     // ── ✅ NEW: SEND OTP FOR REGISTRATION ────────────────────────────────────
     @Override
     public String sendVerificationCode(OtpRequestDto requestDto) {
-        // Check if phone number is already registered
+        // Check if phone number is already registered for Registration requests
         if (StringUtils.isNotEmpty(requestDto.getCodeReqFor()) && requestDto.getCodeReqFor().equals("Registration")
                 && pyUserRepository.existsByPhoneNumber(requestDto.getPhoneNumber())) {
             throw new RuntimeException("Phone number already registered");
+        }
+
+        // Security check: Block demo OTP reset on administrative accounts
+        if (StringUtils.isNotEmpty(requestDto.getCodeReqFor()) && !requestDto.getCodeReqFor().equals("Registration")) {
+            if (!twilioOtpService.isTwilioEnabled() && twilioOtpService.isDemoOtpEnabled()) {
+                pyUserRepository.findByPhoneNumber(requestDto.getPhoneNumber()).ifPresent(u -> {
+                    if (u.getRole() == PyUser.Role.SUPER_ADMIN || u.getRole() == PyUser.Role.ADMIN) {
+                        logger.warn("Security Alert: Blocked demo OTP request on privileged account: {}", maskPhoneNumber(requestDto.getPhoneNumber()));
+                        throw new RuntimeException("Demo OTP cannot be used for administrative accounts.");
+                    }
+                });
+            }
         }
 
         try {
@@ -191,7 +203,9 @@ public class PyUserServiceImpl implements PyUserService {
             if (otpSent) {
                 logger.info("OTP sent successfully for registration to phone: "
                         + maskPhoneNumber(requestDto.getPhoneNumber()));
-                return "OTP sent successfully to your mobile number. Please check your SMS.";
+                return twilioOtpService.isTwilioEnabled()
+                        ? "OTP sent successfully to your mobile number. Please check your SMS."
+                        : "Demo verification initiated for authorized test number. Please enter your configured demo code.";
             } else {
                 logger.error("Failed to send OTP for phone: " + maskPhoneNumber(requestDto.getPhoneNumber()));
                 throw new RuntimeException("Failed to send OTP. Please try again later.");
@@ -231,6 +245,14 @@ public class PyUserServiceImpl implements PyUserService {
         logger.info("Reset MPIN | phone={}", requestDto.getPhoneNumber());
         PyUser user = pyUserRepository.findByPhoneNumber(requestDto.getPhoneNumber())
                 .orElseThrow(() -> new RuntimeException("No account found with this phone number"));
+
+        // Security check: Block demo OTP reset on administrative accounts
+        if (!twilioOtpService.isTwilioEnabled() && twilioOtpService.isDemoOtpEnabled()) {
+            if (user.getRole() == PyUser.Role.SUPER_ADMIN || user.getRole() == PyUser.Role.ADMIN) {
+                logger.warn("Security Alert: Blocked demo OTP reset attempt on privileged account: {}", maskPhoneNumber(requestDto.getPhoneNumber()));
+                throw new RuntimeException("Demo OTP cannot be used to reset administrative accounts.");
+            }
+        }
 
         // ✅ NEW: OTP verification using Twilio (twilio logic kept inside
         // TwilioOtpService)

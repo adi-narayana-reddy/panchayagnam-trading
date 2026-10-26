@@ -35,6 +35,15 @@ public class TwilioOtpService {
     @Value("${twilio.otp-expiry-minutes:5}")
     private int otpExpiryMinutes;
 
+    @Value("${app.demo-otp.enabled:false}")
+    private boolean demoOtpEnabled;
+
+    @Value("${app.demo-otp.allowed-numbers:}")
+    private String demoAllowedNumbers;
+
+    @Value("${app.demo-otp.code:}")
+    private String demoOtpCode;
+
     // Rate Limiting constants
     private static final int RESEND_COOLDOWN_SECONDS = 60; // 60 seconds cooldown between requests
     private static final int MAX_REQUESTS_PER_WINDOW = 5;  // Max 5 OTP requests per window
@@ -45,6 +54,7 @@ public class TwilioOtpService {
         final String code;
         final Instant expiresAt;
         final String codeReqFor;
+        int failedAttempts = 0;
         OtpEntry(String code, Instant expiresAt, String codeReqFor) {
             this.code = code;
             this.expiresAt = expiresAt;
@@ -86,8 +96,20 @@ public class TwilioOtpService {
         // 1. Rate limiting & anti-abuse checks
         checkRateLimit(formatted);
 
-        // 2. Twilio service enablement check
+        // 2. Twilio service enablement check & safe demo OTP handling
         if (!twilioEnabled) {
+            if (demoOtpEnabled && isDemoNumberAllowed(formatted)) {
+                if (demoOtpCode == null || !demoOtpCode.trim().matches("^\\d{6}$")) {
+                    logger.error("Demo OTP is enabled on server, but app.demo-otp.code is not configured as exactly 6 digits.");
+                    throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
+                }
+                int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
+                Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
+                otpStore.put(formatted, new OtpEntry(demoOtpCode.trim(), expiresAt, codeReqFor));
+                logger.info("Demo verification initiated for authorized test number: {}", maskPhoneNumber(formatted));
+                return true;
+            }
+
             logger.warn("Twilio OTP service is disabled (twilio.enabled=false). Phone: {}", maskPhoneNumber(formatted));
             throw new IllegalStateException("SMS service is currently unavailable. Please contact the administrator.");
         }
@@ -197,7 +219,7 @@ public class TwilioOtpService {
      * @return true if OTP matches and not expired, false otherwise
      */
     public boolean verifyOtpV2(String phoneNumber, String otp) {
-        if (phoneNumber == null || otp == null || otp.trim().isEmpty()) {
+        if (phoneNumber == null || otp == null || !otp.trim().matches("^\\d{6}$")) {
             return false;
         }
         try {
@@ -214,18 +236,53 @@ public class TwilioOtpService {
                 otpStore.remove(formatted);
                 return false;
             }
+            if (entry.failedAttempts >= 3) {
+                logger.warn("OTP verification failed - maximum attempts exceeded for {}", maskPhoneNumber(formatted));
+                otpStore.remove(formatted);
+                return false;
+            }
+
             boolean ok = entry.code.equals(otp.trim());
             if (ok) {
                 otpStore.remove(formatted); // Single use OTP
                 logger.info("OTP verification successful for {}", maskPhoneNumber(formatted));
             } else {
-                logger.warn("OTP verification failed - incorrect code for {}", maskPhoneNumber(formatted));
+                entry.failedAttempts++;
+                if (entry.failedAttempts >= 3) {
+                    otpStore.remove(formatted);
+                    logger.warn("OTP invalidated due to 3 failed attempts for {}", maskPhoneNumber(formatted));
+                } else {
+                    logger.warn("OTP verification failed - incorrect code for {} (attempt {}/3)",
+                            maskPhoneNumber(formatted), entry.failedAttempts);
+                }
             }
             return ok;
         } catch (Exception e) {
             logger.error("Error verifying custom OTP for " + maskPhoneNumber(phoneNumber), e);
             return false;
         }
+    }
+
+    public boolean isTwilioEnabled() {
+        return twilioEnabled;
+    }
+
+    public boolean isDemoOtpEnabled() {
+        return demoOtpEnabled;
+    }
+
+    private boolean isDemoNumberAllowed(String formattedPhone) {
+        if (demoAllowedNumbers == null || demoAllowedNumbers.trim().isEmpty() || formattedPhone == null) {
+            return false;
+        }
+        String[] parts = demoAllowedNumbers.split(",");
+        for (String part : parts) {
+            String allowed = formatPhoneNumber(part.trim());
+            if (allowed != null && allowed.equals(formattedPhone)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String generateOtp() {
