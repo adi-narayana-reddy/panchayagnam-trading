@@ -99,24 +99,21 @@ public class TwilioOtpService {
         // 2. Twilio service enablement check & safe demo OTP handling
         if (!twilioEnabled) {
             if (isDemoOtpEnabled()) {
-                if (isDemoNumberAllowed(formatted)) {
-                    String activeCode = getDemoOtpCode();
-                    if (activeCode == null || !activeCode.trim().matches("^\\d{6}$")) {
-                        logger.error("Demo OTP is enabled on server, but DEMO_OTP_CODE is not configured as exactly 6 digits.");
-                        throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
-                    }
-                    int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
-                    Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
-                    otpStore.put(formatted, new OtpEntry(activeCode.trim(), expiresAt, codeReqFor));
-                    logger.info("Demo verification initiated for authorized test number: {}", maskPhoneNumber(formatted));
-                    return true;
-                } else {
-                    logger.warn("Demo OTP request rejected: incoming number is not in DEMO_OTP_ALLOWED_NUMBERS list.");
-                    if (getAllowedNumbers().trim().isEmpty()) {
-                        throw new IllegalStateException("This number is not authorized for demo mode (DEMO_OTP_ALLOWED_NUMBERS is not configured or empty on server). Please contact the administrator.");
-                    }
-                    throw new IllegalStateException("This number is not authorized for demo mode (number not in allowlist). Please contact the administrator.");
+                if (!isValidIndian10DigitNumber(formatted)) {
+                    logger.warn("Demo OTP request rejected: number {} is not a valid 10-digit Indian mobile number", maskPhoneNumber(formatted));
+                    throw new IllegalArgumentException("Demo mode requires a valid 10-digit Indian mobile number.");
                 }
+
+                String activeCode = getDemoOtpCode();
+                if (activeCode == null || !activeCode.trim().matches("^\\d{6}$")) {
+                    logger.error("Demo OTP is enabled on server, but DEMO_OTP_CODE is not configured as exactly 6 digits.");
+                    throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
+                }
+                int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
+                Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
+                otpStore.put(formatted, new OtpEntry(activeCode.trim(), expiresAt, codeReqFor));
+                logger.info("Demo verification initiated for number: {}", maskPhoneNumber(formatted));
+                return true;
             }
 
             logger.warn("Twilio OTP service is disabled (twilio.enabled=false). Phone: {}", maskPhoneNumber(formatted));
@@ -440,6 +437,16 @@ public class TwilioOtpService {
      */
     public static String formatPhoneNumber(String phoneNumber) {
         return normalizeToCanonical(phoneNumber);
+    }
+
+    /**
+     * Checks whether a canonical E.164 phone string represents a valid 10-digit Indian mobile number (+91XXXXXXXXXX).
+     */
+    public static boolean isValidIndian10DigitNumber(String formattedPhone) {
+        if (formattedPhone == null) {
+            return false;
+        }
+        return formattedPhone.matches("^\\+91\\d{10}$");
     }
 
     private static String maskPhoneNumber(String phoneNumber) {

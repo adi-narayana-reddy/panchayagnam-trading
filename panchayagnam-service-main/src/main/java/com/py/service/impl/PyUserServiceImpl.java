@@ -205,7 +205,7 @@ public class PyUserServiceImpl implements PyUserService {
                         + maskPhoneNumber(requestDto.getPhoneNumber()));
                 return twilioOtpService.isTwilioEnabled()
                         ? "OTP sent successfully to your mobile number. Please check your SMS."
-                        : "Demo verification initiated for authorized test number. Please enter your configured demo code.";
+                        : "Demo verification initiated. Please enter your configured demo code.";
             } else {
                 logger.error("Failed to send OTP for phone: " + maskPhoneNumber(requestDto.getPhoneNumber()));
                 throw new RuntimeException("Failed to send OTP. Please try again later.");
