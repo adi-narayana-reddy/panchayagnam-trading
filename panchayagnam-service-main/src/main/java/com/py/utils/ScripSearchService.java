@@ -5,6 +5,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
@@ -37,9 +38,17 @@ public class ScripSearchService {
     // ✅ Track when last loaded
     private LocalDateTime lastLoadedAt;
 
+    // ✅ Toggle to disable heavy 150MB instrument master download in memory-constrained environments
+    @Value("${app.scrip-master.enabled:false}")
+    private boolean scripMasterEnabled;
+
     // ── LOAD ON STARTUP (async — don't block app start) ──────────────────────
     @PostConstruct
     public void load() {
+        if (!scripMasterEnabled) {
+            log.info("Scrip master loading is disabled (app.scrip-master.enabled=false). Skipping background download to conserve memory.");
+            return;
+        }
         CompletableFuture.runAsync(() -> {
             log.info("Loading scrip master in background...");
             loadScripsWithRetry();
@@ -49,6 +58,9 @@ public class ScripSearchService {
     // ── SCHEDULED — every day 8 AM ────────────────────────────────────────────
     @Scheduled(cron = "0 0 8 * * *")
     public void scheduledReload() {
+        if (!scripMasterEnabled) {
+            return;
+        }
         log.info("Scheduled scrip master reload at 8 AM...");
         loadScripsWithRetry();
     }
@@ -56,6 +68,9 @@ public class ScripSearchService {
     // ── SCHEDULED — check every 1 hour if missed 8 AM reload ─────────────────
     @Scheduled(fixedDelay = 60 * 60 * 1000)
     public void reloadIfStale() {
+        if (!scripMasterEnabled) {
+            return;
+        }
         if (lastLoadedAt == null) {
             log.warn("Scrip master not loaded — loading now...");
             loadScripsWithRetry();
