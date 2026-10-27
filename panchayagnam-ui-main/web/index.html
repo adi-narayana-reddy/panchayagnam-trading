@@ -17,6 +17,9 @@
   <base href="$FLUTTER_BASE_HREF">
 
   <meta charset="UTF-8">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="A new Flutter project.">
 
@@ -33,6 +36,171 @@
   <link rel="manifest" href="manifest.json">
 </head>
 <body>
-  <script src="flutter_bootstrap.js" async></script>
+  <script>
+    (function () {
+      var appUrl = new URL(document.baseURI);
+      var appPath = appUrl.pathname;
+      if (!appPath.endsWith('/')) appPath += '/';
+      var appOrigin = appUrl.origin;
+
+      // Determine if this document is actively controlled by an applicable app service worker
+      var activeController = ('serviceWorker' in navigator) ? navigator.serviceWorker.controller : null;
+      var isControlledByApp = false;
+      if (activeController && activeController.scriptURL) {
+        try {
+          var controllerUrl = new URL(activeController.scriptURL);
+          if (controllerUrl.origin === appOrigin && controllerUrl.pathname.startsWith(appPath)) {
+            isControlledByApp = true;
+          }
+        } catch (_) {}
+      }
+
+      function cleanupServiceWorkersAndCaches() {
+        var tasks = [];
+
+        // 1. Unregister ONLY service workers whose scope is safely confirmed to belong exclusively to this app
+        if ('serviceWorker' in navigator) {
+          tasks.push(
+            navigator.serviceWorker.getRegistrations().then(function (registrations) {
+              var unregisterPromises = [];
+              for (var i = 0; i < registrations.length; i++) {
+                var reg = registrations[i];
+                if (!reg || !reg.scope) continue;
+
+                var regUrl;
+                try {
+                  regUrl = new URL(reg.scope);
+                } catch (urlErr) {
+                  throw new Error('Invalid service worker scope URL: ' + reg.scope);
+                }
+
+                if (regUrl.origin === appOrigin) {
+                  var regPath = regUrl.pathname;
+                  if (!regPath.endsWith('/')) regPath += '/';
+                  // Strict matching: scope must be at or inside exact appPath, never broader (e.g. '/') or sibling (e.g. '/panchayagnam-trading-other/')
+                  if (regPath.startsWith(appPath)) {
+                    unregisterPromises.push(
+                      reg.unregister().then(function (unregistered) {
+                        if (unregistered !== true) {
+                          throw new Error('Service worker unregister returned false for scope: ' + reg.scope);
+                        }
+                      })
+                    );
+                  }
+                }
+              }
+              return Promise.all(unregisterPromises);
+            }).catch(function (err) {
+              console.warn('[Panchayagnam] SW cleanup error:', err);
+              throw err;
+            })
+          );
+        }
+
+        // 2. Clear ONLY caches safely identified as belonging exclusively to Panchayagnam
+        // Avoid deleting broad origin-wide 'flutter-*' caches so unrelated apps on the domain are not affected
+        if ('caches' in window) {
+          tasks.push(
+            caches.keys().then(function (names) {
+              var deletePromises = [];
+              for (var i = 0; i < names.length; i++) {
+                var name = names[i];
+                if (name.includes('panchayagnam') || name.includes('easy_trade')) {
+                  deletePromises.push(caches.delete(name));
+                }
+              }
+              return Promise.all(deletePromises);
+            }).catch(function (err) {
+              console.warn('[Panchayagnam] Cache cleanup error:', err);
+              throw err;
+            })
+          );
+        }
+
+        return Promise.all(tasks);
+      }
+
+      var bootstrapInjected = false;
+      function injectFlutterBootstrap() {
+        if (bootstrapInjected) return;
+        bootstrapInjected = true;
+        var bootstrapScript = document.createElement('script');
+        bootstrapScript.src = "flutter_bootstrap.js?v=" + new Date().getTime();
+        bootstrapScript.async = true;
+        document.body.appendChild(bootstrapScript);
+      }
+
+      // Safe controller handling:
+      // If the current document is actively controlled by an app service worker,
+      // unregister it and reload once so the new document starts with zero controller.
+      // Reload protection is multi-layered (URL searchParams + sessionStorage) to prevent loops
+      // even if sessionStorage is blocked, restricted, or throws SecurityError.
+      var alreadyReloaded = false;
+      try {
+        if (new URL(window.location.href).searchParams.get('sw_purged') === '1') {
+          alreadyReloaded = true;
+        }
+        if (sessionStorage.getItem('py_sw_purged') === '1') {
+          alreadyReloaded = true;
+        }
+      } catch (_) {}
+
+      function triggerSafeReload() {
+        try {
+          sessionStorage.setItem('py_sw_purged', '1');
+        } catch (_) {}
+
+        try {
+          var targetUrl = new URL(window.location.href);
+          targetUrl.searchParams.set('sw_purged', '1');
+          window.location.replace(targetUrl.href);
+        } catch (_) {
+          window.location.reload();
+        }
+      }
+
+      var timeoutId = null;
+      var hasHandled = false;
+
+      function onCleanupSuccess() {
+        if (hasHandled) return;
+        hasHandled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+
+        // Reload ONLY after successful cleanup if an app worker is currently controlling
+        if (isControlledByApp && !alreadyReloaded) {
+          triggerSafeReload();
+          return;
+        }
+
+        injectFlutterBootstrap();
+      }
+
+      function onCleanupFailure(err) {
+        if (hasHandled) return;
+        hasHandled = true;
+        if (timeoutId) clearTimeout(timeoutId);
+
+        console.warn('[Panchayagnam] Service worker / cache cleanup rejected:', err);
+        // Do not reload on failure; fail safely to injecting bootstrap
+        injectFlutterBootstrap();
+      }
+
+      function onTimeoutFallback() {
+        if (hasHandled) return;
+        hasHandled = true;
+
+        // Bounded failure safety:
+        // Never trigger reload on timeout (avoids repeated restarts if cleanup hangs).
+        // Safely proceed to inject bootstrap with cache-busting query parameter.
+        injectFlutterBootstrap();
+      }
+
+      // Bounded safety timeout (1500 ms) to avoid indefinitely blocked startup
+      timeoutId = setTimeout(onTimeoutFallback, 1500);
+
+      cleanupServiceWorkersAndCaches().then(onCleanupSuccess).catch(onCleanupFailure);
+    })();
+  </script>
 </body>
 </html>
