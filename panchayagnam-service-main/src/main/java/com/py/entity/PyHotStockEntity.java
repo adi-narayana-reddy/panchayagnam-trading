@@ -13,7 +13,7 @@ import com.py.common.enums.HotStockSignal;
         uniqueConstraints = {
             @UniqueConstraint(
                     name = "uk_symbol_category",
-                    columnNames = {"symbol", "category"}
+                    columnNames = {"symbol", "trade_category"}
             )
         }
 )

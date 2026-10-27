@@ -4,6 +4,7 @@ import com.py.common.enums.HotStockCategory;
 import com.py.entity.PyHotStockEntity;
 import com.py.entity.PyUser;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -15,12 +16,19 @@ import org.springframework.data.repository.query.Param;
 @Repository
 public interface PyHotStockRepository extends JpaRepository<PyHotStockEntity, Long> {
 
-    @Query("SELECT COUNT(s) > 0 FROM PyHotStockEntity s  WHERE s.symbol = :symbol AND s.isActive = true " +
-            "AND s.category = :category AND FUNCTION('DATE', s.createdAt) = :targetDate")
+    @Query("SELECT COUNT(s) > 0 FROM PyHotStockEntity s WHERE s.symbol = :symbol AND s.isActive = true " +
+            "AND s.category = :category AND s.createdAt >= :startOfDay AND s.createdAt < :endOfDay")
     boolean validateHotStock(
-            @Param("symbol") String symbol, @Param("category") HotStockCategory category,
-            @Param("targetDate") LocalDate targetDate
+            @Param("symbol") String symbol,
+            @Param("category") HotStockCategory category,
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay
     );
+
+    default boolean validateHotStock(String symbol, HotStockCategory category, LocalDate targetDate) {
+        LocalDate date = (targetDate != null) ? targetDate : LocalDate.now();
+        return validateHotStock(symbol, category, date.atStartOfDay(), date.plusDays(1).atStartOfDay());
+    }
 
     // Fetch all active stocks
     List<PyHotStockEntity> findByIsActive(Boolean isActive);
@@ -40,14 +48,27 @@ public interface PyHotStockRepository extends JpaRepository<PyHotStockEntity, Lo
     Optional<PyHotStockEntity> findBySymbolAndCategory(
             String symbol, HotStockCategory category);
 
-    @Query("SELECT s FROM PyHotStockEntity s WHERE DATE(s.createdAt) = :date")
-    List<PyHotStockEntity> findByCreatedAtDate(@Param("date") LocalDate date);
+    @Query("SELECT s FROM PyHotStockEntity s WHERE s.createdAt >= :startOfDay AND s.createdAt < :endOfDay")
+    List<PyHotStockEntity> findByCreatedAtDate(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay);
 
-// Fetch all stocks by date and category
-    @Query("SELECT s FROM PyHotStockEntity s WHERE DATE(s.createdAt) = :date AND s.category = :category")
+    default List<PyHotStockEntity> findByCreatedAtDate(LocalDate date) {
+        LocalDate target = (date != null) ? date : LocalDate.now();
+        return findByCreatedAtDate(target.atStartOfDay(), target.plusDays(1).atStartOfDay());
+    }
+
+    // Fetch all stocks by date and category
+    @Query("SELECT s FROM PyHotStockEntity s WHERE s.createdAt >= :startOfDay AND s.createdAt < :endOfDay AND s.category = :category")
     List<PyHotStockEntity> findByCreatedAtDateAndCategory(
-            @Param("date") LocalDate date,
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay,
             @Param("category") HotStockCategory category);
+
+    default List<PyHotStockEntity> findByCreatedAtDateAndCategory(LocalDate date, HotStockCategory category) {
+        LocalDate target = (date != null) ? date : LocalDate.now();
+        return findByCreatedAtDateAndCategory(target.atStartOfDay(), target.plusDays(1).atStartOfDay(), category);
+    }
 
 //    List<PyHotStockEntity> findByIsActiveTrueOrderByChangePercentDesc();
 

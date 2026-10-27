@@ -1,5 +1,7 @@
+import 'dart:html' as html;
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:intl/intl.dart';
+import '../../app_route/user_session.dart';
 import '../../models/hot_stock_model.dart';
 import '../../service/hot_stock_service.dart';
 import 'hot_stock_event.dart';
@@ -23,13 +25,21 @@ class HotStockBloc extends Bloc<HotStockEvent, HotStockState> {
     on<DeleteHotStockEvent>(_onDelete);
     on<ClearOperationResultEvent>(_onClearResult);
 
-    // Auto-fetch on init with default category + today
-    add(
-      FetchHotStocksEvent(
-        date: state.selectedDate,
-        category: state.selectedCategory,
-      ),
-    );
+    // Auto-fetch on init only if authenticated
+    String token = UserSession().token;
+    if (token.isEmpty) {
+      try {
+        token = html.window.sessionStorage['auth_token'] ?? '';
+      } catch (_) {}
+    }
+    if (token.isNotEmpty) {
+      add(
+        FetchHotStocksEvent(
+          date: state.selectedDate,
+          category: state.selectedCategory,
+        ),
+      );
+    }
   }
 
   // ── Fetch ─────────────────────────────────────────────────────────────────
@@ -38,7 +48,28 @@ class HotStockBloc extends Bloc<HotStockEvent, HotStockState> {
       FetchHotStocksEvent event,
       Emitter<HotStockState> emit,
       ) async {
-    emit(state.copyWith(isLoadingStocks: true, clearLoadError: true));
+    String token = UserSession().token;
+    if (token.isEmpty) {
+      try {
+        token = html.window.sessionStorage['auth_token'] ?? '';
+      } catch (_) {}
+    }
+    if (token.isEmpty) {
+      emit(state.copyWith(
+        selectedDate: event.date,
+        selectedCategory: event.category,
+        isLoadingStocks: false,
+        clearLoadError: true,
+      ));
+      return;
+    }
+
+    emit(state.copyWith(
+      selectedDate: event.date,
+      selectedCategory: event.category,
+      isLoadingStocks: true,
+      clearLoadError: true,
+    ));
 
     final result = await _service.fetchByDateAndCategory(
       date: event.date,
@@ -50,6 +81,7 @@ class HotStockBloc extends Bloc<HotStockEvent, HotStockState> {
         state.copyWith(
           stocks: result.data ?? [],
           isLoadingStocks: false,
+          clearLoadError: true,
         ),
       );
     } else {

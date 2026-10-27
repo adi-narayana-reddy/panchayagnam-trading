@@ -111,6 +111,14 @@ class _DashboardTabState extends State<DashboardTab> {
       context.read<FetchUserDematBloc>().add(LoadUserDematAccounts(pyId!));
     }
 
+    // Refresh hot stocks on dashboard entry
+    context.read<HotStockBloc>().add(
+      FetchHotStocksEvent(
+        date: DateFormat('yyyy-MM-dd').format(DateTime.now()),
+        category: HotStockCategory.INTRADAY,
+      ),
+    );
+
     _carouselTimer = Timer.periodic(const Duration(seconds: 4), (_) {
       if (!mounted) return;
       final next = (_carouselIndex + 1) % _slides.length;
@@ -130,12 +138,23 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   Future<void> _pickDate(BuildContext context, String currentDate) async {
-    final initial = DateFormat('yyyy-MM-dd').parse(currentDate);
+    final now = DateTime.now();
+    final todayEnd = DateTime(now.year, now.month, now.day, 23, 59, 59);
+    DateTime initial;
+    try {
+      initial = DateFormat('yyyy-MM-dd').parse(currentDate);
+    } catch (_) {
+      initial = now;
+    }
+    if (initial.isAfter(todayEnd)) {
+      initial = now;
+    }
+
     final picked = await showDatePicker(
       context: context,
       initialDate: initial,
       firstDate: DateTime(2023),
-      lastDate: DateTime.now(),
+      lastDate: todayEnd,
       builder: (ctx, child) => Theme(
         data: Theme.of(ctx).copyWith(
           colorScheme: const ColorScheme.light(
@@ -821,19 +840,38 @@ class _DashboardTabState extends State<DashboardTab> {
     return Center(
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 50),
+        padding: const EdgeInsets.symmetric(vertical: 40),
         decoration: BoxDecoration(
           border: Border.all(color: const Color(0xFFE5E7EB)),
           borderRadius: BorderRadius.circular(8),
           color: const Color(0xFFF9FAFB),
         ),
-        child: Center(
-          child: Lottie.asset(
-            'assets/animations/No Data.json',
-            width: 200,
-            height: 200,
-            fit: BoxFit.contain,
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(
+              Icons.trending_up_rounded,
+              color: Color(0xFFD1D5DB),
+              size: 44,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              'No stocks for this date and category (${category.label})',
+              style: const TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF6B7280),
+              ),
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Try selecting another category or date to view recommendations.',
+              style: TextStyle(
+                fontSize: 11,
+                color: Color(0xFF9CA3AF),
+              ),
+            ),
+          ],
         ),
       ),
     );
