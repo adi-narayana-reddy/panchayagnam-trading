@@ -16,60 +16,55 @@ class _MarketWatchViewState extends State<MarketWatchView> {
 
   // Default watchlist instruments
   final List<ScripInfo> _watchlistItems = [
-    ScripInfo(
-      symbol: 'RELIANCE',
+    const ScripInfo(
       tradingSymbol: 'RELIANCE-EQ',
-      token: '2885',
       exchange: 'NSE',
+      symbolToken: '2885',
       instrumentType: 'EQUITY',
-      lotSize: '1',
-      strikePrice: '',
-      tickSize: '0.05',
+      lotSize: 1,
+      name: 'RELIANCE',
+      tickSize: 0.05,
     ),
-    ScripInfo(
-      symbol: 'TCS',
+    const ScripInfo(
       tradingSymbol: 'TCS-EQ',
-      token: '11536',
       exchange: 'NSE',
+      symbolToken: '11536',
       instrumentType: 'EQUITY',
-      lotSize: '1',
-      strikePrice: '',
-      tickSize: '0.05',
+      lotSize: 1,
+      name: 'TCS',
+      tickSize: 0.05,
     ),
-    ScripInfo(
-      symbol: 'HDFCBANK',
+    const ScripInfo(
       tradingSymbol: 'HDFCBANK-EQ',
-      token: '1333',
       exchange: 'NSE',
+      symbolToken: '1333',
       instrumentType: 'EQUITY',
-      lotSize: '1',
-      strikePrice: '',
-      tickSize: '0.05',
+      lotSize: 1,
+      name: 'HDFCBANK',
+      tickSize: 0.05,
     ),
-    ScripInfo(
-      symbol: 'INFY',
+    const ScripInfo(
       tradingSymbol: 'INFY-EQ',
-      token: '1594',
       exchange: 'NSE',
+      symbolToken: '1594',
       instrumentType: 'EQUITY',
-      lotSize: '1',
-      strikePrice: '',
-      tickSize: '0.05',
+      lotSize: 1,
+      name: 'INFY',
+      tickSize: 0.05,
     ),
-    ScripInfo(
-      symbol: 'ICICIBANK',
+    const ScripInfo(
       tradingSymbol: 'ICICIBANK-EQ',
-      token: '4963',
       exchange: 'NSE',
+      symbolToken: '4963',
       instrumentType: 'EQUITY',
-      lotSize: '1',
-      strikePrice: '',
-      tickSize: '0.05',
+      lotSize: 1,
+      name: 'ICICIBANK',
+      tickSize: 0.05,
     ),
   ];
 
   void _addScrip(ScripInfo scrip) {
-    if (!_watchlistItems.any((item) => item.token == scrip.token)) {
+    if (!_watchlistItems.any((item) => item.symbolToken == scrip.symbolToken)) {
       setState(() {
         _watchlistItems.add(scrip);
       });
@@ -264,7 +259,7 @@ class _MarketWatchViewState extends State<MarketWatchView> {
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
-                                      item.symbol,
+                                      item.name.isNotEmpty ? item.name : item.tradingSymbol,
                                       style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: Color(0xFF111827)),
                                     ),
                                     Text(item.tradingSymbol, style: TextStyle(fontSize: 11, color: Colors.grey.shade500)),
@@ -287,11 +282,11 @@ class _MarketWatchViewState extends State<MarketWatchView> {
                               ),
                               Expanded(
                                 flex: 2,
-                                child: Text(item.token, style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                                child: Text(item.symbolToken, style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
                               ),
                               Expanded(
                                 flex: 2,
-                                child: Text(item.lotSize, style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
+                                child: Text('${item.lotSize}', style: TextStyle(fontSize: 12, color: Colors.grey.shade700)),
                               ),
                               Expanded(
                                 flex: 2,
