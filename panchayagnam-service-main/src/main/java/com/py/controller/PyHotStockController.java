@@ -136,8 +136,7 @@ public class PyHotStockController {
 // ── GET STOCKS BY DATE AND CATEGORY ──────────────────────────────────────
     @Operation(
             summary = "Get Hot Stocks By Date and Category",
-            description = "Fetch all hot stocks (active + inactive) for a specific date "
-            + "and category. Date format: yyyy-MM-dd. Visible to all roles.")
+            description = "Fetch hot stocks for a specific date and category with automatic fallback to latest available. Date format: yyyy-MM-dd. Visible to all roles.")
     @GetMapping("/date/{date}/category/{category}")
     public ResponseEntity<ApiResponse<List<PyHotStockResponseDto>>> getStocksByDateAndCategory(
             @PathVariable @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate date,
@@ -151,6 +150,25 @@ public class PyHotStockController {
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
                     .body(ApiResponse.error(400, "Failed to fetch hot stocks for date and category"));
+        }
+    }
+
+    // ── GET LATEST STOCKS BY CATEGORY ─────────────────────────────────────────
+    @Operation(
+            summary = "Get Latest Active Hot Stocks By Category",
+            description = "Fetch latest available active hot stocks for a category regardless of date. Visible to all roles.")
+    @GetMapping("/latest/category/{category}")
+    public ResponseEntity<ApiResponse<List<PyHotStockResponseDto>>> getLatestStocksByCategory(
+            @PathVariable HotStockCategory category) {
+        try {
+            ApiResponse<List<PyHotStockResponseDto>> response = pyHotStockService
+                    .getLatestStocksByCategory(category);
+            return ResponseEntity.status(response.getStatusCode()).body(response);
+        } catch (RuntimeException e) {
+            log.error("Get latest stocks by category failed | category={}: {}", category, e.getMessage(), e);
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(ApiResponse.error(400, "Failed to fetch latest hot stocks for category"));
         }
     }
 }

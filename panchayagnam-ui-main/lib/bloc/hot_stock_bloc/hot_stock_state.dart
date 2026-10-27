@@ -8,6 +8,8 @@ class HotStockState {
   final List<HotStockModel> stocks;
   final bool isLoadingStocks;
   final String? loadError;
+  final bool isFallback;
+  final String? fallbackDate;
 
   // ── Selected filters ────────────────────────────────────────────────────────
   final HotStockCategory selectedCategory;
@@ -21,6 +23,8 @@ class HotStockState {
     this.stocks = const [],
     this.isLoadingStocks = false,
     this.loadError,
+    this.isFallback = false,
+    this.fallbackDate,
     this.selectedCategory = HotStockCategory.INTRADAY,
     required this.selectedDate,
     this.operationStatus = OperationStatus.idle,
@@ -32,6 +36,9 @@ class HotStockState {
     bool? isLoadingStocks,
     String? loadError,
     bool clearLoadError = false,
+    bool? isFallback,
+    String? fallbackDate,
+    bool clearFallback = false,
     HotStockCategory? selectedCategory,
     String? selectedDate,
     OperationStatus? operationStatus,
@@ -41,6 +48,8 @@ class HotStockState {
       stocks: stocks ?? this.stocks,
       isLoadingStocks: isLoadingStocks ?? this.isLoadingStocks,
       loadError: clearLoadError ? null : (loadError ?? this.loadError),
+      isFallback: clearFallback ? false : (isFallback ?? this.isFallback),
+      fallbackDate: clearFallback ? null : (fallbackDate ?? this.fallbackDate),
       selectedCategory: selectedCategory ?? this.selectedCategory,
       selectedDate: selectedDate ?? this.selectedDate,
       operationStatus: operationStatus ?? this.operationStatus,

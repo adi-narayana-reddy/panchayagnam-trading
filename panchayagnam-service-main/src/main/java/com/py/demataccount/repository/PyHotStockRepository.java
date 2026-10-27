@@ -59,7 +59,7 @@ public interface PyHotStockRepository extends JpaRepository<PyHotStockEntity, Lo
     }
 
     // Fetch all stocks by date and category
-    @Query("SELECT s FROM PyHotStockEntity s WHERE s.createdAt >= :startOfDay AND s.createdAt < :endOfDay AND s.category = :category")
+    @Query("SELECT s FROM PyHotStockEntity s WHERE s.createdAt >= :startOfDay AND s.createdAt < :endOfDay AND s.category = :category ORDER BY s.changePercent DESC")
     List<PyHotStockEntity> findByCreatedAtDateAndCategory(
             @Param("startOfDay") LocalDateTime startOfDay,
             @Param("endOfDay") LocalDateTime endOfDay,
@@ -68,6 +68,30 @@ public interface PyHotStockRepository extends JpaRepository<PyHotStockEntity, Lo
     default List<PyHotStockEntity> findByCreatedAtDateAndCategory(LocalDate date, HotStockCategory category) {
         LocalDate target = (date != null) ? date : LocalDate.now();
         return findByCreatedAtDateAndCategory(target.atStartOfDay(), target.plusDays(1).atStartOfDay(), category);
+    }
+
+    // ── FALLBACK QUERY: Find latest active recommendations for category ──────
+    @Query("SELECT MAX(s.createdAt) FROM PyHotStockEntity s WHERE s.category = :category AND s.isActive = true AND s.createdAt < :endOfDay")
+    LocalDateTime findLatestCreatedAtByCategoryBeforeOrOn(
+            @Param("category") HotStockCategory category,
+            @Param("endOfDay") LocalDateTime endOfDay);
+
+    @Query("SELECT MAX(s.createdAt) FROM PyHotStockEntity s WHERE s.category = :category AND s.isActive = true")
+    LocalDateTime findLatestCreatedAtByCategory(@Param("category") HotStockCategory category);
+
+    default List<PyHotStockEntity> findLatestActiveByCategoryBeforeOrOn(HotStockCategory category, LocalDate onOrBeforeDate) {
+        LocalDate target = (onOrBeforeDate != null) ? onOrBeforeDate : LocalDate.now();
+        LocalDateTime endOfDay = target.plusDays(1).atStartOfDay();
+        LocalDateTime latest = findLatestCreatedAtByCategoryBeforeOrOn(category, endOfDay);
+        if (latest == null) {
+            return java.util.Collections.emptyList();
+        }
+        LocalDate latestDate = latest.toLocalDate();
+        return findByCreatedAtDateAndCategory(latestDate.atStartOfDay(), latestDate.plusDays(1).atStartOfDay(), category);
+    }
+
+    default List<PyHotStockEntity> findLatestActiveByCategory(HotStockCategory category) {
+        return findLatestActiveByCategoryBeforeOrOn(category, LocalDate.now());
     }
 
 //    List<PyHotStockEntity> findByIsActiveTrueOrderByChangePercentDesc();

@@ -191,6 +191,14 @@ class _MainDashboardState extends State<MainDashboard> {
     }
   }
 
+  void _navigateToBrokers() {
+    final subIdx = (currentUserRole == 'SUPER_ADMIN') ? 1 : 0;
+    setState(() {
+      _currentSelection = _NavSelection(1, subIdx);
+      _bodyKey = UniqueKey();
+    });
+  }
+
   Widget _buildBody() {
     final String? roleStr = html.window.sessionStorage['user_role'];
     final UserRole role = switch (roleStr) {
@@ -235,7 +243,7 @@ class _MainDashboardState extends State<MainDashboard> {
     if (currentUserRole == 'USER') {
       switch (_currentSelection.topIndex) {
         case 0:
-          return DashboardTab(userRole: role);
+          return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
         case 2:
           return SubscriptionPlansScreen(userId: userId, isGroup: true);
         case 3:
@@ -249,7 +257,7 @@ class _MainDashboardState extends State<MainDashboard> {
     if (currentUserRole == 'ADMIN') {
       switch (_currentSelection.topIndex) {
         case 0:
-          return DashboardTab(userRole: role);
+          return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
         case 2:
           return GroupOrdersTab();
         case 3:
@@ -263,7 +271,7 @@ class _MainDashboardState extends State<MainDashboard> {
     if (currentUserRole == 'SUPER_ADMIN') {
       switch (_currentSelection.topIndex) {
         case 0:
-          return DashboardTab(userRole: role);
+          return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
         case 2:
           return GroupOrdersTab();
         case 3:
@@ -271,7 +279,7 @@ class _MainDashboardState extends State<MainDashboard> {
       }
     }
 
-    return DashboardTab(userRole: role);
+    return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
   }
 
   Future<void> _handleLogout() async {

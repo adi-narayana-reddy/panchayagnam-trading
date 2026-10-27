@@ -38,12 +38,14 @@ class DashboardTab extends StatefulWidget {
   final UserRole userRole;
   final int accId;
   final double availableMargin;
+  final VoidCallback? onNavigateToBrokers;
 
   const DashboardTab({
     super.key,
     required this.userRole,
     this.accId = 0,
     this.availableMargin = 0.0,
+    this.onNavigateToBrokers,
   });
 
   bool get isSuperAdmin => userRole == UserRole.SUPER_ADMIN;
@@ -468,10 +470,14 @@ class _DashboardTabState extends State<DashboardTab> {
             iconBg: const Color(0xFFCCFBF1),
             accentColor: const Color(0xFF0F766E),
             title: 'Broker Accounts',
-            value: s != null ? _fmt(s.totalBrokerAccounts) : '—',
-            trend: 'Linked brokers',
-            trendUp: true,
-            subPills: s != null
+            value: s != null
+                ? (s.totalBrokerAccounts == 0 ? '0 connected' : _fmt(s.totalBrokerAccounts))
+                : '—',
+            trend: s != null && s.totalBrokerAccounts == 0
+                ? 'No broker connected'
+                : 'Linked brokers',
+            trendUp: s != null && s.totalBrokerAccounts > 0,
+            subPills: s != null && s.totalBrokerAccounts > 0
                 ? [
                     '${s.angelOneAccounts} Angel',
                     '${s.motilalAccounts} Motilal',
@@ -480,6 +486,8 @@ class _DashboardTabState extends State<DashboardTab> {
                     '${s.goodWillAccounts} GoodWill',
                   ]
                 : [],
+            actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
+            onAction: widget.onNavigateToBrokers,
           ),
           _StatCardConfig(
             icon: Icons.pending_actions_rounded,
@@ -526,10 +534,14 @@ class _DashboardTabState extends State<DashboardTab> {
             iconBg: const Color(0xFFCCFBF1),
             accentColor: const Color(0xFF0F766E),
             title: 'Broker Accounts',
-            value: s != null ? _fmt(s.totalBrokerAccounts) : '—',
-            trend: 'Linked brokers',
-            trendUp: true,
-            subPills: s != null
+            value: s != null
+                ? (s.totalBrokerAccounts == 0 ? '0 connected' : _fmt(s.totalBrokerAccounts))
+                : '—',
+            trend: s != null && s.totalBrokerAccounts == 0
+                ? 'No broker connected'
+                : 'Linked brokers',
+            trendUp: s != null && s.totalBrokerAccounts > 0,
+            subPills: s != null && s.totalBrokerAccounts > 0
                 ? [
                     '${s.angelOneAccounts} Angel',
                     '${s.motilalAccounts} Motilal',
@@ -538,6 +550,8 @@ class _DashboardTabState extends State<DashboardTab> {
                     '${s.goodWillAccounts} GoodWill',
                   ]
                 : [],
+            actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
+            onAction: widget.onNavigateToBrokers,
           ),
           _StatCardConfig(
             icon: Icons.workspaces_rounded,
@@ -558,10 +572,14 @@ class _DashboardTabState extends State<DashboardTab> {
             iconBg: const Color(0xFFEDE9FE),
             accentColor: const Color(0xFF7C3AED),
             title: 'Broker Accounts',
-            value: s != null ? _fmt(s.totalBrokerAccounts) : '—',
-            trend: 'Your linked brokers',
-            trendUp: true,
-            subPills: s != null
+            value: s != null
+                ? (s.totalBrokerAccounts == 0 ? '0 connected' : _fmt(s.totalBrokerAccounts))
+                : '—',
+            trend: s != null && s.totalBrokerAccounts == 0
+                ? 'No broker connected'
+                : 'Your linked brokers',
+            trendUp: s != null && s.totalBrokerAccounts > 0,
+            subPills: s != null && s.totalBrokerAccounts > 0
                 ? [
                     '${s.angelOneAccounts} Angel',
                     '${s.motilalAccounts} Motilal',
@@ -570,6 +588,8 @@ class _DashboardTabState extends State<DashboardTab> {
                     '${s.goodWillAccounts} GoodWill',
                   ]
                 : [],
+            actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
+            onAction: widget.onNavigateToBrokers,
           ),
         ];
     }
@@ -721,8 +741,17 @@ class _DashboardTabState extends State<DashboardTab> {
                     : state.loadError != null
                     ? _buildErrorWithEmpty(context, state)
                     : state.stocks.where((s) => s.isActive).isEmpty
-                    ? _buildEmpty(state.selectedCategory)
-                    : _buildStockTable(context, state),
+                    ? _buildEmpty(context, state)
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          if (state.isFallback && state.fallbackDate != null)
+                            _buildFallbackBanner(state.fallbackDate!),
+                          Expanded(
+                            child: _buildStockTable(context, state),
+                          ),
+                        ],
+                      ),
               ),
             ],
           ),
@@ -836,41 +865,149 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
-  Widget _buildEmpty(HotStockCategory category) {
+  Widget _buildFallbackBanner(String fallbackDate) {
+    String formattedDate = fallbackDate;
+    try {
+      final parsed = DateTime.parse(fallbackDate);
+      formattedDate = DateFormat('dd MMM yyyy').format(parsed);
+    } catch (_) {}
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFFBEB),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: const Color(0xFFFDE68A)),
+      ),
+      child: Row(
+        children: [
+          const Icon(
+            Icons.history_rounded,
+            color: Color(0xFFD97706),
+            size: 18,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: Color(0xFF92400E),
+                ),
+                children: [
+                  const TextSpan(
+                    text: 'Recent recommendations — dated ',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  TextSpan(
+                    text: formattedDate,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                  const TextSpan(
+                    text: ' (No recommendations published for selected date)',
+                    style: TextStyle(fontStyle: FontStyle.italic),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmpty(BuildContext context, HotStockState state) {
+    final category = state.selectedCategory;
+    final isToday = _isToday(state.selectedDate);
+
     return Center(
       child: Container(
         width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 40),
+        padding: const EdgeInsets.symmetric(vertical: 36, horizontal: 20),
         decoration: BoxDecoration(
           border: Border.all(color: const Color(0xFFE5E7EB)),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(10),
           color: const Color(0xFFF9FAFB),
         ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Icon(
-              Icons.trending_up_rounded,
-              color: Color(0xFFD1D5DB),
-              size: 44,
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: const BoxDecoration(
+                color: Color(0xFFF3F4F6),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.trending_up_rounded,
+                color: Color(0xFF9CA3AF),
+                size: 32,
+              ),
             ),
             const SizedBox(height: 12),
             Text(
-              'No stocks for this date and category (${category.label})',
+              'No stock recommendations for ${category.label}',
               style: const TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF6B7280),
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Color(0xFF374151),
               ),
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 6),
             const Text(
-              'Try selecting another category or date to view recommendations.',
+              'There are no active stock recommendations published for this date or category.\nTry selecting another category or date.',
+              textAlign: TextAlign.center,
               style: TextStyle(
-                fontSize: 11,
-                color: Color(0xFF9CA3AF),
+                fontSize: 12,
+                color: Color(0xFF6B7280),
+                height: 1.4,
               ),
             ),
+            if (widget.isSuperAdmin && isToday) ...[
+              const SizedBox(height: 16),
+              InkWell(
+                onTap: () => _openAddDialog(context, state),
+                borderRadius: BorderRadius.circular(8),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 8,
+                  ),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: [Color(0xFF7C3AED), Color(0xFF9333EA)],
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                    ),
+                    borderRadius: BorderRadius.circular(8),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFF7C3AED).withOpacity(0.30),
+                        blurRadius: 8,
+                        offset: const Offset(0, 3),
+                      ),
+                    ],
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: const [
+                      Icon(Icons.add_rounded, color: Colors.white, size: 16),
+                      SizedBox(width: 6),
+                      Text(
+                        'Add Recommendation',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.3,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
       ),
@@ -1345,6 +1482,8 @@ class _StatCardConfig {
   final bool trendUp;
   final bool showTrendBadge;
   final List<String> subPills;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   const _StatCardConfig({
     required this.icon,
@@ -1357,6 +1496,8 @@ class _StatCardConfig {
     this.trendUp = true,
     this.showTrendBadge = false,
     this.subPills = const [],
+    this.actionLabel,
+    this.onAction,
   });
 }
 
@@ -1439,7 +1580,35 @@ class _StatCard extends StatelessWidget {
                 const SizedBox(height: 6),
                 Container(height: 0.5, color: const Color(0xFFEEEEEE)),
                 const SizedBox(height: 6),
-                if (config.subPills.isNotEmpty)
+                if (config.actionLabel != null && config.onAction != null)
+                  InkWell(
+                    onTap: config.onAction,
+                    borderRadius: BorderRadius.circular(6),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: config.accentColor.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(6),
+                        border: Border.all(color: config.accentColor.withOpacity(0.25)),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.add_link_rounded, size: 13, color: config.accentColor),
+                          const SizedBox(width: 4),
+                          Text(
+                            config.actionLabel!,
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: config.accentColor,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  )
+                else if (config.subPills.isNotEmpty)
                   _SubPillRow(pills: config.subPills)
                 else
                   _TrendRow(
@@ -1524,7 +1693,35 @@ class _StatCard extends StatelessWidget {
                     children: [
                       Container(height: 0.5, color: const Color(0xFFEEEEEE)),
                       const SizedBox(height: 5),
-                      if (config.subPills.isNotEmpty)
+                      if (config.actionLabel != null && config.onAction != null)
+                        InkWell(
+                          onTap: config.onAction,
+                          borderRadius: BorderRadius.circular(6),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(
+                              color: config.accentColor.withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(6),
+                              border: Border.all(color: config.accentColor.withOpacity(0.25)),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(Icons.add_link_rounded, size: 12, color: config.accentColor),
+                                const SizedBox(width: 4),
+                                Text(
+                                  config.actionLabel!,
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: config.accentColor,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        )
+                      else if (config.subPills.isNotEmpty)
                         _SubPillRow(pills: config.subPills)
                       else
                         _TrendRow(

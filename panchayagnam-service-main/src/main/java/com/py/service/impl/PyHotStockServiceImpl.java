@@ -11,6 +11,7 @@ import com.py.repo.PyUserRepository;
 import com.py.demataccount.repository.*;
 import com.py.service.PyHotStockService;
 import java.time.LocalDate;
+import java.util.Collections;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -329,19 +330,68 @@ public class PyHotStockServiceImpl implements PyHotStockService {
         }
     }
 
-// ── GET STOCKS BY DATE AND CATEGORY ──────────────────────────────────────
+// ── GET STOCKS BY DATE AND CATEGORY (WITH FALLBACK) ───────────────────────
     @Override
     @Transactional(readOnly = true)
     public ApiResponse<List<PyHotStockResponseDto>> getStocksByDateAndCategory(
             LocalDate date, HotStockCategory category) {
         try {
+            LocalDate targetDate = (date != null) ? date : LocalDate.now();
             List<PyHotStockResponseDto> stocks = getMappedStocksByDateAndCategory(
-                    date, category);
-            return ApiResponse.success(
-                    category.name() + " stocks fetched for date: " + date, stocks);
+                    targetDate, category);
+
+            // If stocks exist for the specified date, return them normally
+            if (!stocks.isEmpty()) {
+                return ApiResponse.success(
+                        category.name() + " stocks fetched for date: " + targetDate, stocks);
+            }
+
+            // Fallback: If no stocks exist for targetDate, check if latest active recommendations exist on or before targetDate
+            log.info("No stocks found for date={} category={}, attempting fallback to latest active recommendations on or before {}",
+                    targetDate, category, targetDate);
+            return getLatestStocksByCategoryBeforeOrOn(category, targetDate);
+
         } catch (Exception e) {
             log.error("Failed to fetch stocks by date and category: {}", e.getMessage(), e);
             return ApiResponse.error(500, "Failed to fetch stocks: " + e.getMessage());
+        }
+    }
+
+// ── GET LATEST STOCKS BY CATEGORY ─────────────────────────────────────────
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<PyHotStockResponseDto>> getLatestStocksByCategory(HotStockCategory category) {
+        return getLatestStocksByCategoryBeforeOrOn(category, LocalDate.now());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public ApiResponse<List<PyHotStockResponseDto>> getLatestStocksByCategoryBeforeOrOn(
+            HotStockCategory category, LocalDate onOrBeforeDate) {
+        try {
+            LocalDate target = (onOrBeforeDate != null) ? onOrBeforeDate : LocalDate.now();
+            List<PyHotStockResponseDto> latestStocks = pyHotStockRepository
+                    .findLatestActiveByCategoryBeforeOrOn(category, target)
+                    .stream()
+                    .map(this::mapToResponseDto)
+                    .collect(Collectors.toList());
+
+            if (!latestStocks.isEmpty()) {
+                LocalDate fallbackDate = latestStocks.get(0).getCreatedAt().toLocalDate();
+                log.info("Found {} latest active recommendations for category={} on or before {} (actual date={})",
+                        latestStocks.size(), category, target, fallbackDate);
+                return ApiResponse.success(
+                        "Recent recommendations for " + category.name() + " — dated " + fallbackDate,
+                        latestStocks);
+            }
+
+            return ApiResponse.success(
+                    "No recommendations found for " + category.name(),
+                    Collections.emptyList());
+
+        } catch (Exception e) {
+            log.error("Failed to fetch latest stocks for category {} on or before {}: {}", category, onOrBeforeDate, e.getMessage(), e);
+            return ApiResponse.error(500, "Failed to fetch latest stocks: " + e.getMessage());
         }
     }
 

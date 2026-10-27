@@ -77,11 +77,33 @@ class HotStockBloc extends Bloc<HotStockEvent, HotStockState> {
     );
 
     if (result.success) {
+      final stocks = result.data ?? [];
+      bool isFallback = false;
+      String? fallbackDate;
+
+      if (stocks.isNotEmpty) {
+        // Detect if the stocks returned have a creation date different from the requested date
+        final stockCreated = stocks.first.createdAt;
+        if (stockCreated != null && stockCreated.isNotEmpty) {
+          try {
+            final parsedDate = stockCreated.length >= 10
+                ? stockCreated.substring(0, 10)
+                : '';
+            if (parsedDate.isNotEmpty && parsedDate != event.date) {
+              isFallback = true;
+              fallbackDate = parsedDate;
+            }
+          } catch (_) {}
+        }
+      }
+
       emit(
         state.copyWith(
-          stocks: result.data ?? [],
+          stocks: stocks,
           isLoadingStocks: false,
           clearLoadError: true,
+          isFallback: isFallback,
+          fallbackDate: fallbackDate,
         ),
       );
     } else {

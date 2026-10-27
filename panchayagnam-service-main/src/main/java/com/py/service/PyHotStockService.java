@@ -23,4 +23,9 @@ public interface PyHotStockService {
 
     ApiResponse<List<PyHotStockResponseDto>> getStocksByDateAndCategory(
             LocalDate date, HotStockCategory category);
+
+    ApiResponse<List<PyHotStockResponseDto>> getLatestStocksByCategory(HotStockCategory category);
+
+    ApiResponse<List<PyHotStockResponseDto>> getLatestStocksByCategoryBeforeOrOn(
+            HotStockCategory category, LocalDate onOrBeforeDate);
 }
