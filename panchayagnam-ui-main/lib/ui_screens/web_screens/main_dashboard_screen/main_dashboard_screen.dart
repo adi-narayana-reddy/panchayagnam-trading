@@ -14,11 +14,18 @@ import 'dashboard_tab.dart';
 import 'group_orders_tab.dart';
 import 'groupadmin_tab.dart';
 import 'individual_execution_screen.dart';
+import 'market_watch_view.dart';
+import 'charts_view.dart';
+import 'algo_strategies_view.dart';
+import 'backtesting_view.dart';
+import 'options_chain_view.dart';
+import 'basket_orders_view.dart';
+import 'trading_workspace_views.dart';
 
 const _kGradientTop = Color(0xFF7C3AED);
 const _kGradientMid = Color(0xFF5B21B6);
 const _kGradientBottom = Color(0xFF4C1D95);
-const _kExpandedWidth = 200.0;
+const _kExpandedWidth = 220.0;
 const _kCollapsedWidth = 80.0;
 const _kAnimDuration = Duration(milliseconds: 280);
 const _kAnimCurve = Curves.easeInOut;
@@ -68,7 +75,7 @@ class MainDashboard extends StatefulWidget {
 }
 
 class _MainDashboardState extends State<MainDashboard> {
-  _NavSelection _currentSelection = const _NavSelection(0);
+  _NavSelection _currentSelection = const _NavSelection(0, 0);
   bool _sidebarCollapsed = false;
   bool _roleLoaded = false;
   Key _bodyKey = UniqueKey(); // ← forces full remount on every nav tap
@@ -99,102 +106,64 @@ class _MainDashboardState extends State<MainDashboard> {
   }
 
   List<_NavItem> get _navItems {
-    switch (currentUserRole) {
-      case 'USER':
-        return [
-          const _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-          _NavItem(
-            icon: Icons.admin_panel_settings_rounded,
-            label: 'Role Management',
-            type: _NavItemType.group,
-            children: [
-              _SubNavItem(
-                icon: Icons.people_alt_rounded,
-                label: 'Individual Clients',
-              ),
-            ],
-          ),
-          const _NavItem(
-            icon: Icons.library_books_rounded,
-            label: 'Group Operations',
-          ),
-          const _NavItem(
-            icon: Icons.person_2_outlined,
-            label: 'Client Portfolio',
-          ),
-        ];
+    final isSuperAdmin = currentUserRole == 'SUPER_ADMIN';
 
-      case 'ADMIN':
-        return [
-          const _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-          _NavItem(
-            icon: Icons.admin_panel_settings_rounded,
-            label: 'Role Management',
-            type: _NavItemType.group,
-            children: [
-              _SubNavItem(
-                icon: Icons.people_alt_rounded,
-                label: 'Individual Clients',
-              ),
-            ],
-          ),
-          const _NavItem(
-            icon: Icons.library_books_rounded,
-            label: 'Group Operations',
-          ),
-          const _NavItem(
-            icon: Icons.person_2_outlined,
-            label: 'Client Portfolio',
-          ),
-        ];
-
-      case 'SUPER_ADMIN':
-      default:
-        return [
-          const _NavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
-          _NavItem(
-            icon: Icons.admin_panel_settings_rounded,
-            label: 'Role Management',
-            type: _NavItemType.group,
-            children: [
-              _SubNavItem(icon: Icons.manage_accounts_rounded, label: 'Admins'),
-              _SubNavItem(
-                icon: Icons.people_alt_rounded,
-                label: 'Individual Clients',
-              ),
-            ],
-          ),
-          const _NavItem(
-            icon: Icons.library_books_rounded,
-            label: 'Group Operations',
-          ),
-          const _NavItem(
-            icon: Icons.person_2_outlined,
-            label: 'Client Portfolio',
-          ),
-          _NavItem(
-            icon: Icons.subscriptions_rounded,
-            label: 'Subscription Requests',
-            type: _NavItemType.group,
-            children: [
-              _SubNavItem(
-                icon: Icons.admin_panel_settings_outlined,
-                label: 'Admin Requests',
-              ),
-              _SubNavItem(
-                icon: Icons.person_outline_rounded,
-                label: 'Client Requests',
-              ),
-            ],
-          ),
-        ];
-    }
+    return [
+      const _NavItem(
+        icon: Icons.trending_up_rounded,
+        label: 'Trading Workspace',
+        type: _NavItemType.group,
+        children: [
+          _SubNavItem(icon: Icons.dashboard_rounded, label: 'Dashboard'),
+          _SubNavItem(icon: Icons.remove_red_eye_rounded, label: 'Market Watch'),
+          _SubNavItem(icon: Icons.candlestick_chart_rounded, label: 'Charts'),
+          _SubNavItem(icon: Icons.receipt_long_rounded, label: 'Orders'),
+          _SubNavItem(icon: Icons.pie_chart_outline_rounded, label: 'Positions'),
+          _SubNavItem(icon: Icons.account_balance_wallet_rounded, label: 'Holdings'),
+        ],
+      ),
+      const _NavItem(
+        icon: Icons.psychology_rounded,
+        label: 'Algo Trading',
+        type: _NavItemType.group,
+        children: [
+          _SubNavItem(icon: Icons.auto_awesome_rounded, label: 'Algo Strategies'),
+          _SubNavItem(icon: Icons.history_toggle_off_rounded, label: 'Backtesting'),
+          _SubNavItem(icon: Icons.shield_outlined, label: 'Paper Trading'),
+        ],
+      ),
+      const _NavItem(
+        icon: Icons.content_copy_rounded,
+        label: 'Copy Trading',
+        type: _NavItemType.group,
+        children: [
+          _SubNavItem(icon: Icons.people_alt_rounded, label: 'Copy Trading'),
+          _SubNavItem(icon: Icons.shopping_basket_rounded, label: 'Baskets'),
+        ],
+      ),
+      _NavItem(
+        icon: Icons.construction_rounded,
+        label: 'Tools & Accounts',
+        type: _NavItemType.group,
+        children: [
+          const _SubNavItem(icon: Icons.table_chart_rounded, label: 'Options Chain'),
+          const _SubNavItem(icon: Icons.link_rounded, label: 'Broker Accounts'),
+          const _SubNavItem(icon: Icons.assessment_outlined, label: 'Reports'),
+          const _SubNavItem(icon: Icons.notifications_none_rounded, label: 'Notifications'),
+          const _SubNavItem(icon: Icons.settings_outlined, label: 'Settings'),
+          if (isSuperAdmin) ...[
+            const _SubNavItem(icon: Icons.manage_accounts_rounded, label: 'Group Admins'),
+            const _SubNavItem(icon: Icons.admin_panel_settings_outlined, label: 'Admin Requests'),
+            const _SubNavItem(icon: Icons.person_outline_rounded, label: 'Client Requests'),
+          ],
+        ],
+      ),
+    ];
   }
 
   void _navigateToBrokers() {
-    final subIdx = (currentUserRole == 'SUPER_ADMIN') ? 1 : 0;
     setState(() {
-      _currentSelection = _NavSelection(1, subIdx);
+      _currentSelection = const _NavSelection(3, 1);
       _bodyKey = UniqueKey();
     });
   }
@@ -209,77 +178,75 @@ class _MainDashboardState extends State<MainDashboard> {
     final int userId =
         int.tryParse(html.window.sessionStorage['user_id'] ?? '0') ?? 0;
 
-    // ── Role Management sub-items (topIndex == 1) ──────────────────────────
-    if (_currentSelection.topIndex == 1 && _currentSelection.subIndex != null) {
-      switch (currentUserRole) {
-        case 'USER':
-        case 'ADMIN':
-          return const ChildAccountsTab();
+    final topIdx = _currentSelection.topIndex;
+    final subIdx = _currentSelection.subIndex ?? 0;
 
-        case 'SUPER_ADMIN':
-        default:
-          switch (_currentSelection.subIndex) {
-            case 0:
-              return const GroupAdminsTab();
-            case 1:
-              return const ChildAccountsTab();
-          }
-      }
+    switch (topIdx) {
+      case 0: // Trading Workspace
+        switch (subIdx) {
+          case 0:
+            return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
+          case 1:
+            return const MarketWatchView();
+          case 2:
+            return const ChartsView();
+          case 3:
+            return const OrdersView();
+          case 4:
+            return const PositionsView();
+          case 5:
+            return const HoldingsView();
+          default:
+            return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
+        }
+
+      case 1: // Algo Trading
+        switch (subIdx) {
+          case 0:
+            return const AlgoStrategiesView();
+          case 1:
+            return const BacktestingView();
+          case 2:
+            return const PaperTradingView();
+          default:
+            return const AlgoStrategiesView();
+        }
+
+      case 2: // Copy Trading
+        switch (subIdx) {
+          case 0:
+            return GroupOrdersTab();
+          case 1:
+            return const BasketOrdersView();
+          default:
+            return GroupOrdersTab();
+        }
+
+      case 3: // Tools & Accounts
+        switch (subIdx) {
+          case 0:
+            return const OptionsChainView();
+          case 1:
+            return const ChildAccountsTab();
+          case 2:
+            return const ReportsView();
+          case 3:
+            return const NotificationsView();
+          case 4:
+            return const SettingsView();
+          case 5: // Group Admins (Super Admin only)
+            return const GroupAdminsTab();
+          case 6: // Admin Requests (Super Admin only)
+            return ApproveUsersTab("admin");
+          case 7: // Client Requests (Super Admin only)
+            return ApproveUsersTab("client");
+          default:
+            return const ChildAccountsTab();
+        }
+
+      default:
+        return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
     }
-
-    // ── Subscription Requests sub-items (SUPER_ADMIN, topIndex == 4) ───────
-    if (currentUserRole == 'SUPER_ADMIN' &&
-        _currentSelection.topIndex == 4 &&
-        _currentSelection.subIndex != null) {
-      switch (_currentSelection.subIndex) {
-        case 0:
-          return ApproveUsersTab("admin"); // Admin Requests
-        case 1:
-          return ApproveUsersTab("client"); // Client Requests
-      }
-    }
-
-    // ── USER routes ────────────────────────────────────────────────────────
-    if (currentUserRole == 'USER') {
-      switch (_currentSelection.topIndex) {
-        case 0:
-          return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
-        case 2:
-          return SubscriptionPlansScreen(userId: userId, isGroup: true);
-        case 3:
-          return html.window.sessionStorage['expiredFlag'] == "true"
-              ? SubscriptionPlansScreen(userId: userId, isGroup: false)
-              : IndividualExecutionScreen(userId);
-      }
-    }
-
-    // ── ADMIN routes ───────────────────────────────────────────────────────
-    if (currentUserRole == 'ADMIN') {
-      switch (_currentSelection.topIndex) {
-        case 0:
-          return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
-        case 2:
-          return GroupOrdersTab();
-        case 3:
-          return html.window.sessionStorage['expiredFlag'] == "true"
-              ? SubscriptionPlansScreen(userId: userId, isGroup: false)
-              : IndividualExecutionScreen(userId);
-      }
-    }
-
-    // ── SUPER_ADMIN routes ─────────────────────────────────────────────────
-    if (currentUserRole == 'SUPER_ADMIN') {
-      switch (_currentSelection.topIndex) {
-        case 0:
-          return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
-        case 2:
-          return GroupOrdersTab();
-        case 3:
-          return IndividualExecutionScreen(userId);
-      }
-    }
-
-    return DashboardTab(userRole: role, onNavigateToBrokers: _navigateToBrokers);
   }
 
   Future<void> _handleLogout() async {
@@ -1100,6 +1067,9 @@ class _ExpandableNavItemState extends State<_ExpandableNavItem>
     if (widget.collapsed && _isExpanded) {
       _isExpanded = false;
       _ctrl.reverse();
+    } else if (!old.isGroupActive && widget.isGroupActive && !widget.collapsed && !_isExpanded) {
+      _isExpanded = true;
+      _ctrl.forward();
     }
   }
 

@@ -438,11 +438,100 @@ class _DashboardTabState extends State<DashboardTab> {
     );
   }
 
+  (String, String, bool) _getMarketStatus() {
+    final now = DateTime.now().toUtc().add(const Duration(hours: 5, minutes: 30)); // IST
+    if (now.weekday == DateTime.saturday || now.weekday == DateTime.sunday) {
+      return ('Closed', 'Weekend · Normal hours closed', false);
+    }
+    final minutes = now.hour * 60 + now.minute;
+    if (minutes >= 9 * 60 && minutes < 9 * 60 + 15) {
+      return ('Pre-Open', '09:00 - 09:15 IST (excl. holidays)', true);
+    }
+    if (minutes >= 9 * 60 + 15 && minutes < 15 * 60 + 30) {
+      return ('Open (Hours)', 'Normal hours · Excl. holidays', true);
+    }
+    return ('Closed', 'Outside normal hours · Excl. holidays', false);
+  }
+
   List<_StatCardConfig> _getStatCards(DashboardCountState state) {
     final s = state.stats;
+    final (marketLabel, marketDetail, marketOpen) = _getMarketStatus();
+
+    final marketCard = _StatCardConfig(
+      icon: Icons.schedule_rounded,
+      iconColor: marketOpen ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+      iconBg: marketOpen ? const Color(0xFFD1FAE5) : const Color(0xFFFEF3C7),
+      accentColor: marketOpen ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+      title: 'Market Hours (IST)',
+      value: marketLabel,
+      trend: marketDetail,
+      trendUp: marketOpen,
+      showTrendBadge: true,
+    );
+
+    final paperTradingCard = _StatCardConfig(
+      icon: Icons.shield_outlined,
+      iconColor: const Color(0xFF7C3AED),
+      iconBg: const Color(0xFFEDE9FE),
+      accentColor: const Color(0xFF7C3AED),
+      title: 'Paper Trading',
+      value: 'Simulation Mode',
+      trend: 'Zero Real Funds at Risk',
+      trendUp: true,
+    );
+
+    final algoCard = _StatCardConfig(
+      icon: Icons.psychology_rounded,
+      iconColor: const Color(0xFF3B82F6),
+      iconBg: const Color(0xFFDBEAFE),
+      accentColor: const Color(0xFF3B82F6),
+      title: 'Algo Strategies',
+      value: '0 active',
+      trend: 'Setup in Algo Strategies',
+      trendUp: false,
+    );
+
     switch (widget.userRole) {
       case UserRole.SUPER_ADMIN:
         return [
+          marketCard,
+          _StatCardConfig(
+            icon: Icons.account_balance_wallet_rounded,
+            iconColor: const Color(0xFF0F766E),
+            iconBg: const Color(0xFFCCFBF1),
+            accentColor: const Color(0xFF0F766E),
+            title: 'Broker Accounts',
+            value: s != null
+                ? (s.totalBrokerAccounts == 0 ? '0 connected' : _fmt(s.totalBrokerAccounts))
+                : '—',
+            trend: s != null && s.totalBrokerAccounts == 0
+                ? 'No broker connected'
+                : 'Linked brokers',
+            trendUp: s != null && s.totalBrokerAccounts > 0,
+            subPills: s != null && s.totalBrokerAccounts > 0
+                ? [
+                    '${s.angelOneAccounts} Angel',
+                    '${s.motilalAccounts} Motilal',
+                    '${s.profitMartAccounts} ProfitMart',
+                    if (s.dhanAccounts > 0) '${s.dhanAccounts} Dhan',
+                    '${s.goodWillAccounts} GoodWill',
+                  ]
+                : [],
+            actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
+            onAction: widget.onNavigateToBrokers,
+          ),
+          paperTradingCard,
+          algoCard,
+          _StatCardConfig(
+            icon: Icons.workspaces_rounded,
+            iconColor: const Color(0xFF10B981),
+            iconBg: const Color(0xFFD1FAE5),
+            accentColor: const Color(0xFF10B981),
+            title: 'Copy Groups',
+            value: s != null ? _fmt(s.groupCount) : '—',
+            trend: 'Active order groups',
+            trendUp: true,
+          ),
           _StatCardConfig(
             icon: Icons.people_alt_rounded,
             iconColor: const Color(0xFF7C3AED),
@@ -450,84 +539,13 @@ class _DashboardTabState extends State<DashboardTab> {
             accentColor: const Color(0xFF7C3AED),
             title: 'Total Users',
             value: s != null ? _fmt(s.totalUsers) : '—',
-            trend: '+12% this month',
-            trendUp: true,
-            showTrendBadge: true,
-          ),
-          _StatCardConfig(
-            icon: Icons.admin_panel_settings_rounded,
-            iconColor: const Color(0xFF1D4ED8),
-            iconBg: const Color(0xFFDBEAFE),
-            accentColor: const Color(0xFF1D4ED8),
-            title: 'Total Admins',
-            value: s != null ? _fmt(s.totalAdmins) : '—',
-            trend: 'Active managers',
-            trendUp: true,
-          ),
-          _StatCardConfig(
-            icon: Icons.account_balance_wallet_rounded,
-            iconColor: const Color(0xFF0F766E),
-            iconBg: const Color(0xFFCCFBF1),
-            accentColor: const Color(0xFF0F766E),
-            title: 'Broker Accounts',
-            value: s != null
-                ? (s.totalBrokerAccounts == 0 ? '0 connected' : _fmt(s.totalBrokerAccounts))
-                : '—',
-            trend: s != null && s.totalBrokerAccounts == 0
-                ? 'No broker connected'
-                : 'Linked brokers',
-            trendUp: s != null && s.totalBrokerAccounts > 0,
-            subPills: s != null && s.totalBrokerAccounts > 0
-                ? [
-                    '${s.angelOneAccounts} Angel',
-                    '${s.motilalAccounts} Motilal',
-                    '${s.profitMartAccounts} ProfitMart',
-                    if (s.dhanAccounts > 0) '${s.dhanAccounts} Dhan',
-                    '${s.goodWillAccounts} GoodWill',
-                  ]
-                : [],
-            actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
-            onAction: widget.onNavigateToBrokers,
-          ),
-          _StatCardConfig(
-            icon: Icons.pending_actions_rounded,
-            iconColor: const Color(0xFFF59E0B),
-            iconBg: const Color(0xFFFEF3C7),
-            accentColor: const Color(0xFFF59E0B),
-            title: 'Pending Requests',
-            value: s != null ? _fmt(s.pendingRequests) : '—',
-            trend: 'Awaiting approval',
-            trendUp: false,
-            subPills: s != null
-                ? [
-                    '${s.approvedRequests} approved',
-                    '${s.rejectedRequests} rejected',
-                  ]
-                : [],
-          ),
-          _StatCardConfig(
-            icon: Icons.workspaces_rounded,
-            iconColor: const Color(0xFF10B981),
-            iconBg: const Color(0xFFD1FAE5),
-            accentColor: const Color(0xFF10B981),
-            title: 'Groups',
-            value: s != null ? _fmt(s.groupCount) : '—',
-            trend: 'Active order groups',
-            trendUp: true,
-          ),
-          _StatCardConfig(
-            icon: Icons.verified_user_rounded,
-            iconColor: const Color(0xFFEF4444),
-            iconBg: const Color(0xFFFFE4E6),
-            accentColor: const Color(0xFFEF4444),
-            title: 'Super Admins',
-            value: s != null ? _fmt(s.totalSuperAdmins) : '—',
-            trend: 'Full root access',
+            trend: 'Registered traders',
             trendUp: true,
           ),
         ];
       case UserRole.ADMIN:
         return [
+          marketCard,
           _StatCardConfig(
             icon: Icons.account_balance_wallet_rounded,
             iconColor: const Color(0xFF0F766E),
@@ -553,12 +571,14 @@ class _DashboardTabState extends State<DashboardTab> {
             actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
             onAction: widget.onNavigateToBrokers,
           ),
+          paperTradingCard,
+          algoCard,
           _StatCardConfig(
             icon: Icons.workspaces_rounded,
             iconColor: const Color(0xFF10B981),
             iconBg: const Color(0xFFD1FAE5),
             accentColor: const Color(0xFF10B981),
-            title: 'Groups',
+            title: 'Copy Groups',
             value: s != null ? _fmt(s.groupCount) : '—',
             trend: 'Active order groups',
             trendUp: true,
@@ -566,6 +586,7 @@ class _DashboardTabState extends State<DashboardTab> {
         ];
       case UserRole.USER:
         return [
+          marketCard,
           _StatCardConfig(
             icon: Icons.account_balance_wallet_rounded,
             iconColor: const Color(0xFF7C3AED),
@@ -591,6 +612,8 @@ class _DashboardTabState extends State<DashboardTab> {
             actionLabel: s != null && s.totalBrokerAccounts == 0 ? 'Connect Broker' : null,
             onAction: widget.onNavigateToBrokers,
           ),
+          paperTradingCard,
+          algoCard,
         ];
     }
   }
