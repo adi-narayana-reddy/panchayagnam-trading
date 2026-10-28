@@ -48,7 +48,7 @@ jobs:
       - name: Build Flutter Web Release
         working-directory: ./panchayagnam-ui-main
         run: |
-          API_URL="${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://panchayagnam-api.onrender.com' }}"
+          API_URL="${{ vars.API_BASE_URL || secrets.API_BASE_URL || 'https://panchayagnam-trading.onrender.com' }}"
           flutter build web --release --pwa-strategy=none --base-href /${{ github.event.repository.name }}/ --dart-define=API_BASE_URL="$API_URL"
 
       - name: Configure GitHub Pages
