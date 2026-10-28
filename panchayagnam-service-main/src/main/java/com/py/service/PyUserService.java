@@ -20,6 +20,8 @@ public interface PyUserService {
 
     PyLoginResponseDto loginUser(PyLoginRequestDto requestDto);
 
+    PyLoginResponseDto loginUserWithOtp(PyLoginOtpRequestDto requestDto);
+
     String resetMpin(PyResetMpinRequestDto requestDto);
 
     /**

@@ -95,7 +95,9 @@ class _WebForgotMpinScreenState extends State<WebForgotMpinScreen> {
             child: BlocConsumer<AuthBloc, AuthState>(
               listener: (context, state) {
                 // ── OTP sent successfully ──────────────────────────────────
-                if (state is OtpSentSuccess) {
+                if (state is OtpSentSuccess || state is ForgotMpinOtpSent) {
+                  final msg = state is OtpSentSuccess ? state.message : (state as ForgotMpinOtpSent).message;
+                  final otp = state is OtpSentSuccess ? state.otp : (state as ForgotMpinOtpSent).otp;
                   setState(() {
                     _otpSent = true;
                     _canResend = false;
@@ -104,8 +106,13 @@ class _WebForgotMpinScreenState extends State<WebForgotMpinScreen> {
                   _startTimer();
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
-                      content: Text(state.message),
+                      content: Text(
+                        otp != null && otp.isNotEmpty
+                            ? '$msg (Reset OTP: $otp)'
+                            : msg,
+                      ),
                       backgroundColor: const Color(0xFF7C3AED),
+                      duration: const Duration(seconds: 8),
                       behavior: SnackBarBehavior.floating,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10)),
@@ -119,6 +126,7 @@ class _WebForgotMpinScreenState extends State<WebForgotMpinScreen> {
                         create: (_) => AuthBloc(),
                         child: WebResetMpinScreen(
                           phoneNumber: _phoneCtrl.text.trim(),
+                          initialOtp: otp,
                         ),
                       ),
                     ),

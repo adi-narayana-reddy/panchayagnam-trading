@@ -358,12 +358,20 @@ class _RightPanelState extends State<_RightPanel> {
             _canResend = false;
             _timerSeconds = 60;
             _loadingAction = _LoadingAction.none; // reset loader
+            if (state.otp != null && state.otp!.isNotEmpty) {
+              _otpCtrl.text = state.otp!;
+            }
           });
           _startTimer();
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
-              content: Text(state.message),
+              content: Text(
+                state.otp != null && state.otp!.isNotEmpty
+                    ? '${state.message} (Verification OTP: ${state.otp})'
+                    : state.message,
+              ),
               backgroundColor: const Color(0xFF7C3AED),
+              duration: const Duration(seconds: 8),
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),

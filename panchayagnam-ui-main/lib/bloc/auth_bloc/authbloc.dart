@@ -13,6 +13,7 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     on<SendOtpRequested>(_onSendOtp);
     on<RegisterRequested>(_onRegister);
     on<LoginRequested>(_onLogin);
+    on<LoginWithOtpRequested>(_onLoginWithOtp);
     on<ForgotMpinRequested>(_onForgotMpin);
     on<ResetMpinRequested>(_onResetMpin);
     on<LogoutRequested>(_onLogout);
@@ -29,8 +30,12 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
         phoneNumber: event.phoneNumber,
         codeReqFor: event.codeReqFor,
       );
+      final otp = result['data']?.toString();
       emit(
-        OtpSentSuccess(message: result['message'] ?? 'OTP sent successfully'),
+        OtpSentSuccess(
+          message: result['message'] ?? 'OTP sent successfully',
+          otp: otp,
+        ),
       );
     } catch (e) {
       emit(AuthError(message: e.toString().replaceFirst('Exception: ', '')));
@@ -105,6 +110,53 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
     }
   }
 
+  Future<void> _onLoginWithOtp(
+    LoginWithOtpRequested event,
+    Emitter<AuthState> emit,
+  ) async {
+    emit(AuthLoading());
+    try {
+      final result = await serviceClass.loginWithOtp(
+        phoneNumber: event.phoneNumber,
+        otp: event.otp,
+      );
+      final data = result['data'] as Map<String, dynamic>;
+
+      final token = data['token'] as String;
+      final fullName = data['fullName'] as String;
+      final email = data['email'] as String;
+      final phoneNumber = data['phoneNumber'] as String;
+      final role = data['role'] as String;
+      final expiredFlag = data['expiredFlag'];
+
+      final userId = data['userId'] as int? ?? 0;
+      final expiresInDays = data['expiresInDays'] as int? ?? 0;
+      final noOfClients = data['noOfClients'] as int? ?? 0;
+
+      SessionStorageHelper.setString('auth_token', token);
+      SessionStorageHelper.setString('user_role', role);
+      SessionStorageHelper.setString('user_fullName', fullName);
+      SessionStorageHelper.setString('user_email', email);
+      SessionStorageHelper.setString('user_phoneNumber', phoneNumber);
+      SessionStorageHelper.setInt('user_id', userId);
+      SessionStorageHelper.setInt('expiresInDays', expiresInDays);
+      SessionStorageHelper.setString('expiredFlag', expiredFlag.toString());
+      SessionStorageHelper.setString('noOfClients', noOfClients.toString());
+      emit(
+        LoginSuccess(
+          token: token,
+          fullName: fullName,
+          email: email,
+          phoneNumber: phoneNumber,
+          role: role,
+          userId: userId,
+        ),
+      );
+    } catch (e) {
+      emit(AuthError(message: e.toString().replaceFirst('Exception: ', '')));
+    }
+  }
+
   Future<void> _onForgotMpin(
     ForgotMpinRequested event,
     Emitter<AuthState> emit,
@@ -114,10 +166,12 @@ class AuthBloc extends Bloc<AuthEvent, AuthState> {
       final result = await serviceClass.forgotMpin(
         phoneNumber: event.phoneNumber,
       );
+      final otp = result['data']?.toString();
       emit(
         ForgotMpinOtpSent(
           message: result['message'] ?? 'OTP sent successfully',
           phoneNumber: event.phoneNumber,
+          otp: otp,
         ),
       );
     } catch (e) {

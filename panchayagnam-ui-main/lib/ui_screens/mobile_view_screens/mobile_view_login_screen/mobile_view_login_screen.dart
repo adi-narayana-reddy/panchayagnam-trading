@@ -1,6 +1,11 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
+import '../../../bloc/auth_bloc/authbloc.dart';
+import '../../../bloc/auth_bloc/auth_event.dart';
+import '../../../bloc/auth_bloc/auth_state.dart';
 import '../../../constants/colors.dart';
+import '../../../reusable_widets/web_forgot_screen.dart';
 import '../../web_screens/main_dashboard_screen/main_dashboard_screen.dart';
 import '../../web_screens/web_register_screen/web_register_screen.dart';
 
@@ -13,7 +18,6 @@ class MobileSignInScreen extends StatefulWidget {
 
 class _MobileSignInScreenState extends State<MobileSignInScreen> {
   bool _obscurePassword = true;
-  bool _isLoading = false;
   final _formKey = GlobalKey<FormState>();
   final TextEditingController _phoneCtrl = TextEditingController();
   final TextEditingController _passCtrl = TextEditingController();
@@ -27,14 +31,12 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
 
   void _handleLogin() {
     if (_formKey.currentState!.validate()) {
-      setState(() => _isLoading = true);
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) setState(() => _isLoading = false);
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (_) => const MainDashboard()),
-        );
-      });
+      context.read<AuthBloc>().add(
+        LoginRequested(
+          phoneNumber: _phoneCtrl.text.trim(),
+          password: _passCtrl.text.trim(),
+        ),
+      );
     }
   }
 
@@ -43,19 +45,37 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
     final h = MediaQuery.of(context).size.height;
     final w = MediaQuery.of(context).size.width;
 
-    return Scaffold(
-      /*backgroundColor: const Color(0xFFF3F0FB),*/
-      body: SafeArea(
-        child: SingleChildScrollView(
-          child: Column(
-            children: [
-              // ── Purple header panel ──────────────────────────────────────
-              Container(
-                width: double.infinity,
-                decoration: const BoxDecoration(
-                  gradient: LinearGradient(
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
+    return BlocConsumer<AuthBloc, AuthState>(
+      listener: (context, state) {
+        if (state is AuthSuccess) {
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (_) => const MainDashboard()),
+          );
+        } else if (state is AuthFailure) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(state.message),
+              backgroundColor: Colors.red,
+            ),
+          );
+        }
+      },
+      builder: (context, state) {
+        final isLoading = state is AuthLoading;
+
+        return Scaffold(
+          body: SafeArea(
+            child: SingleChildScrollView(
+              child: Column(
+                children: [
+                  // ── Purple header panel ──────────────────────────────────────
+                  Container(
+                    width: double.infinity,
+                    decoration: const BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
                     colors: [
                       Color(0xFF7C3AED),
                       Color(0xFF5B21B6),
@@ -268,18 +288,20 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
 
                       SizedBox(height: h * 0.018),
 
-                      // Password field
-                      _fieldLabel('PASSWORD'),
+                      // MPIN field
+                      _fieldLabel('MPIN (6 DIGITS)'),
                       const SizedBox(height: 8),
                       TextFormField(
                         controller: _passCtrl,
                         obscureText: _obscurePassword,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
                         style: const TextStyle(
                           fontSize: 14,
                           color: Color(0xFF1E1B4B),
                         ),
                         decoration: _inputDecoration(
-                          hint: 'Enter your password',
+                          hint: 'Enter your 6-digit MPIN',
                           icon: _obscurePassword
                               ? Icons.visibility_outlined
                               : Icons.visibility_off_outlined,
@@ -288,13 +310,13 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
                               () => _obscurePassword = !_obscurePassword,
                             );
                           },
-                        ),
+                        ).copyWith(counterText: ''),
                         validator: (v) {
                           if (v == null || v.isEmpty) {
-                            return 'Password is required';
+                            return 'MPIN is required';
                           }
-                          if (v.length < 8) {
-                            return 'Minimum 8 characters required';
+                          if (v.length != 6 || !RegExp(r'^[0-9]{6}$').hasMatch(v)) {
+                            return 'Enter valid 6-digit MPIN';
                           }
                           return null;
                         },
@@ -306,9 +328,14 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
-                          onPressed: () {},
+                          onPressed: () {
+                            showDialog(
+                              context: context,
+                              builder: (_) => const WebForgotMpinScreen(),
+                            );
+                          },
                           child: const Text(
-                            'Forgot password?',
+                            'Forgot MPIN?',
                             style: TextStyle(
                               fontSize: 13,
                               color: AppColors.primary,
@@ -325,7 +352,7 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
                         width: double.infinity,
                         height: 50,
                         child: ElevatedButton(
-                          onPressed: _isLoading ? null : _handleLogin,
+                          onPressed: isLoading ? null : _handleLogin,
                           style: ElevatedButton.styleFrom(
                             backgroundColor: AppColors.primary,
                             foregroundColor: Colors.white,
@@ -334,7 +361,7 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
                               borderRadius: BorderRadius.circular(12),
                             ),
                           ),
-                          child: _isLoading
+                          child: isLoading
                               ? const SizedBox(
                                   width: 22,
                                   height: 22,
@@ -438,6 +465,8 @@ class _MobileSignInScreenState extends State<MobileSignInScreen> {
           ),
         ),
       ),
+    );
+      },
     );
   }
 

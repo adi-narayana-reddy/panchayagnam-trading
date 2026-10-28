@@ -9,8 +9,9 @@ import '../ui_screens/web_screens/web_login_screen/web_login_screen.dart';
 
 class WebResetMpinScreen extends StatefulWidget {
   final String phoneNumber;
+  final String? initialOtp;
 
-  const WebResetMpinScreen({super.key, required this.phoneNumber});
+  const WebResetMpinScreen({super.key, required this.phoneNumber, this.initialOtp});
 
   @override
   State<WebResetMpinScreen> createState() => _WebResetMpinScreenState();
@@ -23,6 +24,14 @@ class _WebResetMpinScreenState extends State<WebResetMpinScreen> {
   final _confirmMpinCtrl = TextEditingController();
   bool _obscureMpin = true;
   bool _obscureConfirm = true;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialOtp != null && widget.initialOtp!.isNotEmpty) {
+      _otpCtrl.text = widget.initialOtp!;
+    }
+  }
 
   @override
   void dispose() {

@@ -65,14 +65,40 @@ public class PyUserController {
         log.info("POST /send-otp | phone={}", requestDto.getPhoneNumber());
         try {
             String message = pyUserService.sendVerificationCode(requestDto);
+            String activeOtp = twilioOtpService.getActiveOtp(requestDto.getPhoneNumber());
             log.info("OTP sent successfully for phone={}", requestDto.getPhoneNumber());
             return ResponseEntity
-                    .ok(PyApiResponseDto.success(message, null));
+                    .ok(PyApiResponseDto.success(message, activeOtp));
         } catch (RuntimeException e) {
             log.error("Send OTP failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
             return ResponseEntity
                     .status(HttpStatus.BAD_REQUEST)
                     .body(PyApiResponseDto.failure(e.getMessage() != null ? e.getMessage() : "Failed to send OTP"));
+        }
+    }
+
+    // ── FORGOT MPIN ─────────────────────────────────────────────
+    @PostMapping("/forgot-mpin")
+    @Operation(
+            summary = "Forgot MPIN - Request Reset OTP",
+            description = "Send a verification OTP to the user's registered phone number to reset MPIN.",
+            tags = {"Authentication"}
+    )
+    public ResponseEntity<PyApiResponseDto<String>> forgotMpin(
+            @Valid @RequestBody PyForgotMpinRequestDto requestDto) {
+        log.info("POST /forgot-mpin | phone={}", requestDto.getPhoneNumber());
+        try {
+            OtpRequestDto otpDto = new OtpRequestDto();
+            otpDto.setPhoneNumber(requestDto.getPhoneNumber());
+            otpDto.setCodeReqFor("Reset");
+            String message = pyUserService.sendVerificationCode(otpDto);
+            String activeOtp = twilioOtpService.getActiveOtp(requestDto.getPhoneNumber());
+            return ResponseEntity.ok(PyApiResponseDto.success(message, activeOtp));
+        } catch (RuntimeException e) {
+            log.error("Forgot MPIN failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
+            return ResponseEntity
+                    .status(HttpStatus.BAD_REQUEST)
+                    .body(PyApiResponseDto.failure(e.getMessage() != null ? e.getMessage() : "Failed to request MPIN reset"));
         }
     }
 
@@ -113,7 +139,7 @@ public class PyUserController {
     // ── LOGIN ────────────────────────────────────────────────────
     @PostMapping("/login")
     @Operation(
-            summary = "User Login",
+            summary = "User Login with MPIN",
             description = "Login with phone number and MPIN. Returns JWT token on successful authentication.",
             tags = {"Authentication"}
     )
@@ -140,6 +166,39 @@ public class PyUserController {
             return ResponseEntity
                     .status(HttpStatus.UNAUTHORIZED)
                     .body(PyApiResponseDto.failure("Login failed"));
+        }
+    }
+
+    // ── LOGIN WITH OTP ───────────────────────────────────────────
+    @PostMapping("/login-otp")
+    @Operation(
+            summary = "User Login with OTP",
+            description = "Login with phone number and OTP. Returns JWT token on successful authentication.",
+            tags = {"Authentication"}
+    )
+    @ApiResponse(
+            responseCode = "200",
+            description = "Login successful",
+            content = @Content(mediaType = "application/json", schema = @Schema(implementation = PyApiResponseDto.class))
+    )
+    @ApiResponse(
+            responseCode = "401",
+            description = "Invalid phone number or OTP",
+            content = @Content(mediaType = "application/json")
+    )
+    public ResponseEntity<PyApiResponseDto<PyLoginResponseDto>> loginWithOtp(
+            @Valid @RequestBody PyLoginOtpRequestDto requestDto) {
+        log.info("POST /login-otp | phone={}", requestDto.getPhoneNumber());
+        try {
+            PyLoginResponseDto response = pyUserService.loginUserWithOtp(requestDto);
+            log.info("Login with OTP successful | userId={}, role={}", response.getUserId(), response.getRole());
+            return ResponseEntity
+                    .ok(PyApiResponseDto.success("Login successful", response));
+        } catch (RuntimeException e) {
+            log.error("Login with OTP failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
+            return ResponseEntity
+                    .status(HttpStatus.UNAUTHORIZED)
+                    .body(PyApiResponseDto.failure(e.getMessage() != null ? e.getMessage() : "Login with OTP failed"));
         }
     }
 

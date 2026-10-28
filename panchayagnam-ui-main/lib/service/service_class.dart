@@ -107,33 +107,78 @@ class ServiceClass {
     required String phoneNumber,
     required String mpin,
   }) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/pyauth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phoneNumber': phoneNumber, 'mpin': mpin}),
-    );
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/api/v1/pyauth/login'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phoneNumber': phoneNumber, 'mpin': mpin}),
+      ).timeout(_timeout);
 
-    final data = jsonDecode(response.body);
-    if (response.statusCode == 200) {
-      if (data['success'] == true) return data;
-      throw Exception(data['message'] ?? 'Login failed');
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        if (data['success'] == true) return data;
+        throw Exception(data['message'] ?? 'Login failed');
+      }
+      throw Exception(data['message'] ?? 'Login failed (${response.statusCode})');
+    } on TimeoutException {
+      throw Exception('Server request timed out. Please try again later.');
+    } catch (e) {
+      if (e is Exception && !e.toString().contains('ClientException') && !e.toString().contains('XMLHttpRequest')) {
+        rethrow;
+      }
+      throw Exception('Unable to reach Panchayagnam server. Please verify your connection.');
     }
-    throw Exception(data['message'] ?? 'Login failed');
+  }
+
+  Future<Map<String, dynamic>> loginWithOtp({
+    required String phoneNumber,
+    required String otp,
+  }) async {
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/api/v1/pyauth/login-otp'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phoneNumber': phoneNumber, 'otp': otp}),
+      ).timeout(_timeout);
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        if (data['success'] == true) return data;
+        throw Exception(data['message'] ?? 'Login failed');
+      }
+      throw Exception(data['message'] ?? 'Login with OTP failed (${response.statusCode})');
+    } on TimeoutException {
+      throw Exception('Server request timed out. Please try again later.');
+    } catch (e) {
+      if (e is Exception && !e.toString().contains('ClientException') && !e.toString().contains('XMLHttpRequest')) {
+        rethrow;
+      }
+      throw Exception('Unable to reach Panchayagnam server. Please verify your connection.');
+    }
   }
 
   Future<Map<String, dynamic>> forgotMpin({required String phoneNumber}) async {
-    final response = await http.post(
-      Uri.parse('$_baseUrl/api/v1/pyauth/forgot-mpin'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'phoneNumber': phoneNumber}),
-    );
+    try {
+      final response = await _client.post(
+        Uri.parse('$_baseUrl/api/v1/pyauth/forgot-mpin'),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phoneNumber': phoneNumber}),
+      ).timeout(_timeout);
 
-    final data = jsonDecode(response.body);
-    if (response.statusCode == 200) {
-      if (data['success'] == true) return data;
-      throw Exception(data['message'] ?? 'Failed to send OTP');
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200) {
+        if (data['success'] == true) return data;
+        throw Exception(data['message'] ?? 'Failed to send OTP');
+      }
+      throw Exception(data['message'] ?? 'Failed to send OTP (${response.statusCode})');
+    } on TimeoutException {
+      throw Exception('Server request timed out. Please try again later.');
+    } catch (e) {
+      if (e is Exception && !e.toString().contains('ClientException') && !e.toString().contains('XMLHttpRequest')) {
+        rethrow;
+      }
+      throw Exception('Unable to reach Panchayagnam server. Please verify your connection.');
     }
-    throw Exception(data['message'] ?? 'Failed to send OTP');
   }
 
   Future<Map<String, dynamic>> resetMpin({

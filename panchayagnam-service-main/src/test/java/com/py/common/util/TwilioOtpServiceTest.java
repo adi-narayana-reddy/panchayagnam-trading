@@ -102,4 +102,43 @@ class TwilioOtpServiceTest {
         assertFalse(service.verifyOtpV2(null, "123456"));
         assertFalse(service.verifyOtpV2("9876543210", "999999"));
     }
+
+    @Test
+    @DisplayName("Generate dynamic demo OTP and retrieve active OTP for 10-digit number")
+    void testSendOtp_DemoMode_DynamicCode() {
+        TwilioOtpService service = new TwilioOtpService();
+        ReflectionTestUtils.setField(service, "twilioEnabled", false);
+        ReflectionTestUtils.setField(service, "demoOtpEnabled", true);
+
+        boolean sent = service.sendOtpV2("9876543210", "Registration");
+        assertTrue(sent);
+
+        String activeOtp = service.getActiveOtp("9876543210");
+        assertNotNull(activeOtp);
+        assertEquals(6, activeOtp.length());
+        assertTrue(activeOtp.matches("^\\d{6}$"));
+
+        boolean verified = service.verifyOtpV2("9876543210", activeOtp);
+        assertTrue(verified);
+
+        // Single-use OTP: second verification must fail
+        assertFalse(service.verifyOtpV2("9876543210", activeOtp));
+    }
+
+    @Test
+    @DisplayName("Verify configured static demo OTP code")
+    void testSendOtp_DemoMode_ConfiguredCode() {
+        TwilioOtpService service = new TwilioOtpService();
+        ReflectionTestUtils.setField(service, "twilioEnabled", false);
+        ReflectionTestUtils.setField(service, "demoOtpEnabled", true);
+        ReflectionTestUtils.setField(service, "demoOtpCode", "654321");
+
+        boolean sent = service.sendOtpV2("9123456789", "Registration");
+        assertTrue(sent);
+
+        String activeOtp = service.getActiveOtp("9123456789");
+        assertEquals("654321", activeOtp);
+
+        assertTrue(service.verifyOtpV2("9123456789", "654321"));
+    }
 }

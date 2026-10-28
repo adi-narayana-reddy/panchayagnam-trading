@@ -13,9 +13,10 @@ class AuthLoading extends AuthState {}
 // ── NEW ──────────────────────────────────────────────────────────────────────
 class OtpSentSuccess extends AuthState {
   final String message;
-  const OtpSentSuccess({required this.message});
+  final String? otp;
+  const OtpSentSuccess({required this.message, this.otp});
   @override
-  List<Object?> get props => [message];
+  List<Object?> get props => [message, otp];
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -54,9 +55,10 @@ class LoginSuccess extends AuthState {
 class ForgotMpinOtpSent extends AuthState {
   final String message;
   final String phoneNumber;
-  const ForgotMpinOtpSent({required this.message, required this.phoneNumber});
+  final String? otp;
+  const ForgotMpinOtpSent({required this.message, required this.phoneNumber, this.otp});
   @override
-  List<Object?> get props => [message, phoneNumber];
+  List<Object?> get props => [message, phoneNumber, otp];
 }
 
 // Reset MPIN

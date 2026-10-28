@@ -174,17 +174,86 @@ public class PyUserServiceImpl implements PyUserService {
         return responseDto;
     }
 
-    // ── ✅ NEW: SEND OTP FOR REGISTRATION ────────────────────────────────────
+    // ── LOGIN WITH OTP ───────────────────────────────────────────
+    @Override
+    public PyLoginResponseDto loginUserWithOtp(PyLoginOtpRequestDto requestDto) {
+        logger.info("Login with OTP attempt | phone={}", requestDto.getPhoneNumber());
+        if (!verifyOtp(requestDto.getPhoneNumber(), requestDto.getOtp())) {
+            logger.warn("Login with OTP failed — invalid or expired OTP | phone={}", requestDto.getPhoneNumber());
+            throw new RuntimeException("Invalid or expired OTP. Please try again");
+        }
+
+        PyUser user = pyUserRepository.findByPhoneNumber(requestDto.getPhoneNumber())
+                .orElseThrow(() -> {
+                    logger.warn("Login failed — user not found | phone={}", requestDto.getPhoneNumber());
+                    return new RuntimeException("User not found with this phone number. Please register first");
+                });
+
+        if (!user.getIsActive()) {
+            logger.warn("Login failed — account deactivated | userId={}", user.getId());
+            throw new RuntimeException("Your account is deactivated. Please contact support");
+        }
+
+        String token = pyJwtUtil.generateToken(
+                user.getId(),
+                user.getPhoneNumber(),
+                user.getRole().name());
+
+        PyLoginResponseDto responseDto = new PyLoginResponseDto();
+        responseDto.setUserId(user.getId());
+        responseDto.setFullName(user.getFullName());
+        responseDto.setEmail(user.getEmail());
+        responseDto.setPhoneNumber(user.getPhoneNumber());
+        responseDto.setRole(user.getRole().name());
+        responseDto.setToken(token);
+
+        String type;
+        if (user.getRole().name().equals(PyUser.Role.USER.name())){
+            type = Type.CLIENT.name();
+        } else if (user.getRole().name().equals(PyUser.Role.SUPER_ADMIN.name())){
+            type = Type.ADMIN.name();
+        } else {
+            type = user.getRole().name();
+        }
+
+        // Attach subscription info
+        pySubscriptionRepository
+                .findTopByPyUserAndTypeOrderByCreatedAtDesc(user, Type.valueOf(type))
+                .ifPresent(sub -> {
+                    long daysLeft = ChronoUnit.DAYS.between(LocalDateTime.now(), sub.getEndDate());
+                    boolean expired = sub.getEndDate().isBefore(LocalDateTime.now());
+
+                    if (expired && sub.getStatus() != PySubscription.Status.EXPIRED) {
+                        sub.setStatus(PySubscription.Status.EXPIRED);
+                        pySubscriptionRepository.save(sub);
+                    }
+
+                    responseDto.setExpiresInDays(Math.max(daysLeft, 0));
+                    responseDto.setExpiredFlag(expired);
+                    responseDto.setNoOfClients(sub.getNoOfClients());
+                });
+
+        logger.info("Login with OTP successful | userId={}, role={}", user.getId(), user.getRole());
+        return responseDto;
+    }
+
+    // ── ✅ NEW: SEND OTP FOR REGISTRATION / RESET / LOGIN ────────────────────
     @Override
     public String sendVerificationCode(OtpRequestDto requestDto) {
+        String reqFor = requestDto.getCodeReqFor() != null ? requestDto.getCodeReqFor().trim() : "";
+
         // Check if phone number is already registered for Registration requests
-        if (StringUtils.isNotEmpty(requestDto.getCodeReqFor()) && requestDto.getCodeReqFor().equals("Registration")
-                && pyUserRepository.existsByPhoneNumber(requestDto.getPhoneNumber())) {
+        if (reqFor.equalsIgnoreCase("Registration") && pyUserRepository.existsByPhoneNumber(requestDto.getPhoneNumber())) {
             throw new RuntimeException("Phone number already registered");
         }
 
+        // Check if user exists for non-registration requests (Reset, Login, ForgotMPIN)
+        if (!reqFor.equalsIgnoreCase("Registration") && !reqFor.isEmpty() && !pyUserRepository.existsByPhoneNumber(requestDto.getPhoneNumber())) {
+            throw new RuntimeException("No account found with this phone number. Please register first");
+        }
+
         // Security check: Block demo OTP reset on administrative accounts
-        if (StringUtils.isNotEmpty(requestDto.getCodeReqFor()) && !requestDto.getCodeReqFor().equals("Registration")) {
+        if (!reqFor.equalsIgnoreCase("Registration") && !reqFor.isEmpty()) {
             if (!twilioOtpService.isTwilioEnabled() && twilioOtpService.isDemoOtpEnabled()) {
                 pyUserRepository.findByPhoneNumber(requestDto.getPhoneNumber()).ifPresent(u -> {
                     if (u.getRole() == PyUser.Role.SUPER_ADMIN || u.getRole() == PyUser.Role.ADMIN) {
@@ -196,28 +265,29 @@ public class PyUserServiceImpl implements PyUserService {
         }
 
         try {
-            // Send OTP using TwilioOtpService (Twilio-specific logic resides inside service)
-            // Use custom-message sender so SMS body can be branded/customized
             boolean otpSent = twilioOtpService.sendOtpV2(requestDto.getPhoneNumber(), requestDto.getCodeReqFor());
 
             if (otpSent) {
-                logger.info("OTP sent successfully for registration to phone: "
-                        + maskPhoneNumber(requestDto.getPhoneNumber()));
+                String activeOtp = twilioOtpService.getActiveOtp(requestDto.getPhoneNumber());
+                logger.info("OTP sent successfully for phone: {}", maskPhoneNumber(requestDto.getPhoneNumber()));
+                if (activeOtp != null) {
+                    return "OTP sent successfully. Your OTP is: " + activeOtp;
+                }
                 return twilioOtpService.isTwilioEnabled()
                         ? "OTP sent successfully to your mobile number. Please check your SMS."
-                        : "Demo verification initiated. Please enter your configured demo code.";
+                        : "Verification code initiated. Please check your SMS or configured demo code.";
             } else {
-                logger.error("Failed to send OTP for phone: " + maskPhoneNumber(requestDto.getPhoneNumber()));
+                logger.error("Failed to send OTP for phone: {}", maskPhoneNumber(requestDto.getPhoneNumber()));
                 throw new RuntimeException("Failed to send OTP. Please try again later.");
             }
         } catch (IllegalArgumentException | IllegalStateException e) {
             logger.warn("Validation/configuration issue sending OTP: {}", e.getMessage());
             throw new RuntimeException(e.getMessage());
         } catch (RuntimeException e) {
-            logger.error("Error sending OTP for registration: {}", e.getMessage());
+            logger.error("Error sending OTP: {}", e.getMessage());
             throw e;
         } catch (Exception e) {
-            logger.error("Unexpected error sending OTP for registration", e);
+            logger.error("Unexpected error sending OTP", e);
             throw new RuntimeException("Failed to send OTP: " + e.getMessage());
         }
     }

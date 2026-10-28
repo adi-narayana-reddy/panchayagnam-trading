@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:easy_trade_web/constants/colors.dart';
 import 'package:easy_trade_web/ui_screens/web_screens/web_ip_screen/home_screen.dart';
@@ -659,6 +660,14 @@ class _RightPanelState extends State<_RightPanel>
   final _formKey = GlobalKey<FormState>();
   final _phoneCtrl = TextEditingController();
   final _mpinCtrl = TextEditingController();
+  final _otpCtrl = TextEditingController();
+
+  bool _isOtpLogin = false;
+  bool _otpSent = false;
+  bool _canResend = false;
+  int _timerSeconds = 60;
+  Timer? _timer;
+  bool _isSendingOtp = false;
 
   late AnimationController _staggerCtrl;
   late List<Animation<double>> _itemFades;
@@ -702,10 +711,60 @@ class _RightPanelState extends State<_RightPanel>
     _staggerCtrl.forward();
   }
 
+  void _startTimer() {
+    _timer?.cancel();
+    setState(() {
+      _timerSeconds = 60;
+      _canResend = false;
+    });
+    _timer = Timer.periodic(const Duration(seconds: 1), (t) {
+      if (_timerSeconds <= 1) {
+        t.cancel();
+        if (mounted) {
+          setState(() {
+            _timerSeconds = 0;
+            _canResend = true;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _timerSeconds--);
+      }
+    });
+  }
+
+  String get _timerLabel {
+    final m = _timerSeconds ~/ 60;
+    final s = _timerSeconds % 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+  }
+
+  void _sendLoginOtp() {
+    final phone = _phoneCtrl.text.trim();
+    if (phone.length != 10 || !RegExp(r'^[0-9]+$').hasMatch(phone)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid 10-digit phone number first'),
+          backgroundColor: Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+    setState(() => _isSendingOtp = true);
+    context.read<AuthBloc>().add(
+      SendOtpRequested(
+        phoneNumber: phone,
+        codeReqFor: 'Login',
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _phoneCtrl.dispose();
     _mpinCtrl.dispose();
+    _otpCtrl.dispose();
+    _timer?.cancel();
     _staggerCtrl.dispose();
     super.dispose();
   }
@@ -734,7 +793,33 @@ class _RightPanelState extends State<_RightPanel>
             userId: state.userId,
           );
           context.go(AppRoutes.dashboard);
+        } else if (state is OtpSentSuccess) {
+          setState(() {
+            _otpSent = true;
+            _canResend = false;
+            _isSendingOtp = false;
+            if (state.otp != null && state.otp!.isNotEmpty) {
+              _otpCtrl.text = state.otp!;
+            }
+          });
+          _startTimer();
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                state.otp != null && state.otp!.isNotEmpty
+                    ? '${state.message} (Login OTP: ${state.otp})'
+                    : state.message,
+              ),
+              backgroundColor: const Color(0xFF7C3AED),
+              duration: const Duration(seconds: 8),
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          );
         } else if (state is AuthError) {
+          setState(() => _isSendingOtp = false);
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(state.message),
@@ -790,7 +875,7 @@ class _RightPanelState extends State<_RightPanel>
 
                   const SizedBox(height: 22),
 
-                  // 1 — Headline
+                  // 1 — Headline & Mode Toggle
                   _stagger(
                     1,
                     Column(
@@ -815,11 +900,13 @@ class _RightPanelState extends State<_RightPanel>
                             height: 1.5,
                           ),
                         ),
+                        const SizedBox(height: 20),
+                        _loginModeSelector(),
                       ],
                     ),
                   ),
 
-                  const SizedBox(height: 36),
+                  const SizedBox(height: 28),
 
                   // 2 — Phone field
                   _stagger(
@@ -829,110 +916,113 @@ class _RightPanelState extends State<_RightPanel>
                       children: [
                         _fieldLabel('PHONE NUMBER'),
                         const SizedBox(height: 8),
-                        _phoneField(),
+                        if (_isOtpLogin)
+                          _phoneFieldWithOtpButton()
+                        else
+                          _phoneField(),
                       ],
                     ),
                   ),
 
                   const SizedBox(height: 22),
 
-                  // 3 — MPIN field
+                  // 3 — MPIN or OTP field
                   _stagger(
                     3,
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _fieldLabel('MPIN'),
-                        const SizedBox(height: 8),
-                        _mpinField(),
+                        if (!_isOtpLogin) ...[
+                          _fieldLabel('MPIN'),
+                          const SizedBox(height: 8),
+                          _mpinField(),
+                        ] else ...[
+                          _fieldLabel('6-DIGIT OTP'),
+                          const SizedBox(height: 8),
+                          _otpField(),
+                        ],
                       ],
                     ),
                   ),
 
                   const SizedBox(height: 14),
 
-                  // 4 — Forgot MPIN
+                  // 4 — Forgot MPIN or OTP Resend status
                   _stagger(
                     4,
                     Row(
                       children: [
                         const Spacer(),
-                        InkWell(
-                          onTap: () {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (_) => BlocProvider(
-                                  create: (_) => AuthBloc(),
-                                  child: const WebForgotMpinScreen(),
+                        if (!_isOtpLogin)
+                          InkWell(
+                            onTap: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => BlocProvider(
+                                    create: (_) => AuthBloc(),
+                                    child: const WebForgotMpinScreen(),
+                                  ),
+                                ),
+                              );
+                            },
+                            borderRadius: BorderRadius.circular(6),
+                            child: const Padding(
+                              padding: EdgeInsets.symmetric(
+                                horizontal: 4,
+                                vertical: 2,
+                              ),
+                              child: Text(
+                                'Forgot MPIN?',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.primary,
+                                  fontWeight: FontWeight.w700,
                                 ),
                               ),
-                            );
-                          },
-                          borderRadius: BorderRadius.circular(6),
-                          child: const Padding(
-                            padding: EdgeInsets.symmetric(
-                              horizontal: 4,
-                              vertical: 2,
                             ),
+                          )
+                        else if (_otpSent && !_canResend)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                             child: Text(
-                              'Forgot MPIN?',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: AppColors.primary,
-                                fontWeight: FontWeight.w700,
+                              'Resend available in $_timerLabel',
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: Color(0xFF7C3AED),
+                                fontWeight: FontWeight.w600,
                               ),
                             ),
                           ),
-                        ),
-
-                        // InkWell(
-                        //   onTap: () {
-                        //     Navigator.push(
-                        //       context,
-                        //       MaterialPageRoute(
-                        //         builder: (_) => BlocProvider(
-                        //           create: (_) => AuthBloc(),
-                        //           child: const HomeScreen(),
-                        //         ),
-                        //       ),
-                        //     );
-                        //   },
-                        //   borderRadius: BorderRadius.circular(6),
-                        //   child: const Padding(
-                        //     padding: EdgeInsets.symmetric(
-                        //       horizontal: 4,
-                        //       vertical: 2,
-                        //     ),
-                        //     child: Text(
-                        //       'IP',
-                        //       style: TextStyle(
-                        //         fontSize: 13,
-                        //         color: AppColors.primary,
-                        //         fontWeight: FontWeight.w700,
-                        //       ),
-                        //     ),
-                        //   ),
-                        // ),
                       ],
                     ),
                   ),
 
-                  const SizedBox(height: 28),
+                  const SizedBox(height: 24),
 
                   // 5 — Sign In button
                   _stagger(
                     5,
                     _AnimatedSignInButton(
                       isLoading: isLoading,
+                      buttonText: _isOtpLogin ? 'Sign In with OTP' : 'Sign In with MPIN',
                       onPressed: () {
                         if (_formKey.currentState!.validate()) {
-                          context.read<AuthBloc>().add(
-                            LoginRequested(
-                              phoneNumber: _phoneCtrl.text.trim(),
-                              mpin: _mpinCtrl.text.trim(),
-                            ),
-                          );
+                          if (_isOtpLogin) {
+                            context.read<AuthBloc>().add(
+                              LoginWithOtpRequested(
+                                phoneNumber: _phoneCtrl.text.trim(),
+                                otp: _otpCtrl.text.trim(),
+                              ),
+                            );
+                          } else {
+                            context.read<AuthBloc>().add(
+                              LoginRequested(
+                                phoneNumber: _phoneCtrl.text.trim(),
+                                mpin: _mpinCtrl.text.trim(),
+                              ),
+                            );
+                          }
                         }
                       },
                     ),
@@ -1149,6 +1239,185 @@ class _RightPanelState extends State<_RightPanel>
       ),
     );
   }
+
+  Widget _loginModeSelector() {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFEDE9FE).withOpacity(0.5),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFDDD6FE)),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: _loginModeButton(
+              title: 'Login with MPIN',
+              icon: Icons.lock_outline_rounded,
+              isActive: !_isOtpLogin,
+              onTap: () => setState(() => _isOtpLogin = false),
+            ),
+          ),
+          const SizedBox(width: 6),
+          Expanded(
+            child: _loginModeButton(
+              title: 'Login with OTP',
+              icon: Icons.sms_outlined,
+              isActive: _isOtpLogin,
+              onTap: () => setState(() => _isOtpLogin = true),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _loginModeButton({
+    required String title,
+    required IconData icon,
+    required bool isActive,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(9),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        padding: const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: isActive ? Colors.white : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+          boxShadow: isActive
+              ? [
+                  BoxShadow(
+                    color: const Color(0xFF7C3AED).withOpacity(0.12),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  )
+                ]
+              : [],
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              icon,
+              size: 16,
+              color: isActive ? const Color(0xFF7C3AED) : const Color(0xFF6B7280),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              title,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: isActive ? FontWeight.w700 : FontWeight.w500,
+                color: isActive ? const Color(0xFF7C3AED) : const Color(0xFF6B7280),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _phoneFieldWithOtpButton() {
+    return TextFormField(
+      controller: _phoneCtrl,
+      keyboardType: TextInputType.phone,
+      style: const TextStyle(
+        fontSize: 14,
+        color: Color(0xFF1E1B4B),
+        fontWeight: FontWeight.w500,
+      ),
+      decoration: InputDecoration(
+        hintText: 'Enter your phone number',
+        hintStyle: const TextStyle(fontSize: 13, color: Color(0xFF9CA3AF)),
+        prefixIcon: const Icon(Icons.phone_outlined, size: 20, color: Color(0xFF9CA3AF)),
+        suffixIcon: Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: _isSendingOtp
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: Center(
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Color(0xFF7C3AED),
+                    ),
+                  ),
+                )
+              : TextButton(
+                  onPressed: (_otpSent && !_canResend) ? null : _sendLoginOtp,
+                  style: TextButton.styleFrom(
+                    foregroundColor: const Color(0xFF7C3AED),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  child: Text(
+                    _otpSent ? (_canResend ? 'Resend OTP' : _timerLabel) : 'Get OTP',
+                    style: const TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF7C3AED),
+                    ),
+                  ),
+                ),
+        ),
+        filled: true,
+        fillColor: const Color(0xFFFAF9FF),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFE5E7EB)),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFF7C3AED), width: 2),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFEF4444)),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: const BorderSide(color: Color(0xFFEF4444), width: 2),
+        ),
+      ),
+      validator: (v) {
+        if (v == null || v.isEmpty) return 'Phone number is required';
+        if (v.length != 10) return 'Enter valid 10-digit phone number';
+        if (!RegExp(r'^[0-9]+$').hasMatch(v)) return 'Only numbers allowed';
+        return null;
+      },
+    );
+  }
+
+  Widget _otpField() {
+    return TextFormField(
+      controller: _otpCtrl,
+      keyboardType: TextInputType.number,
+      maxLength: 6,
+      style: const TextStyle(
+        fontSize: 16,
+        color: Color(0xFF1E1B4B),
+        fontWeight: FontWeight.w700,
+        letterSpacing: 4,
+      ),
+      decoration: _inputDecoration(
+        hint: 'Enter 6-digit OTP',
+        icon: Icons.shield_outlined,
+      ).copyWith(counterText: ''),
+      validator: (v) {
+        if (v == null || v.isEmpty) return 'OTP is required';
+        if (v.length < 6) return 'OTP must be 6 digits';
+        if (!RegExp(r'^[0-9]+$').hasMatch(v)) return 'Only numbers allowed';
+        return null;
+      },
+    );
+  }
 }
 
 // ─── Animated Sign In Button ──────────────────────────────────────────────────
@@ -1156,10 +1425,12 @@ class _RightPanelState extends State<_RightPanel>
 class _AnimatedSignInButton extends StatefulWidget {
   final bool isLoading;
   final VoidCallback onPressed;
+  final String? buttonText;
 
   const _AnimatedSignInButton({
     required this.isLoading,
     required this.onPressed,
+    this.buttonText,
   });
 
   @override
@@ -1255,20 +1526,20 @@ class _AnimatedSignInButtonState extends State<_AnimatedSignInButton>
                     ),
                   )
                 else
-                  const Row(
+                  Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
                       Text(
-                        'Sign In',
-                        style: TextStyle(
+                        widget.buttonText ?? 'Sign In',
+                        style: const TextStyle(
                           fontSize: 15,
                           fontWeight: FontWeight.w800,
                           color: Colors.white,
                           letterSpacing: 0.5,
                         ),
                       ),
-                      SizedBox(width: 8),
-                      Icon(
+                      const SizedBox(width: 8),
+                      const Icon(
                         Icons.arrow_forward_rounded,
                         color: Colors.white,
                         size: 18,
