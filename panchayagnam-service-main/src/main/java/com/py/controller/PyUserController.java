@@ -65,10 +65,9 @@ public class PyUserController {
         log.info("POST /send-otp | phone={}", requestDto.getPhoneNumber());
         try {
             String message = pyUserService.sendVerificationCode(requestDto);
-            String activeOtp = twilioOtpService.wasSmsDeliveredDirectly(requestDto.getPhoneNumber()) ? null : twilioOtpService.getActiveOtp(requestDto.getPhoneNumber());
             log.info("OTP sent successfully for phone={}", requestDto.getPhoneNumber());
             return ResponseEntity
-                    .ok(PyApiResponseDto.success(message, activeOtp));
+                    .ok(PyApiResponseDto.success(message, null));
         } catch (RuntimeException e) {
             log.error("Send OTP failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
             return ResponseEntity
@@ -92,8 +91,7 @@ public class PyUserController {
             otpDto.setPhoneNumber(requestDto.getPhoneNumber());
             otpDto.setCodeReqFor("Reset");
             String message = pyUserService.sendVerificationCode(otpDto);
-            String activeOtp = twilioOtpService.wasSmsDeliveredDirectly(requestDto.getPhoneNumber()) ? null : twilioOtpService.getActiveOtp(requestDto.getPhoneNumber());
-            return ResponseEntity.ok(PyApiResponseDto.success(message, activeOtp));
+            return ResponseEntity.ok(PyApiResponseDto.success(message, null));
         } catch (RuntimeException e) {
             log.error("Forgot MPIN failed for phone={}: {}", requestDto.getPhoneNumber(), e.getMessage(), e);
             return ResponseEntity

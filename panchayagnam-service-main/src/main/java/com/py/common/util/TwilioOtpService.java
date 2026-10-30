@@ -420,15 +420,42 @@ public class TwilioOtpService {
 
             if (body != null && (body.contains("\"return\":true") || body.contains("\"return\": true"))) {
                 return new Fast2SmsResult(true, "SMS delivered successfully");
-            } else {
-                String errorDetail = "Fast2SMS error";
-                if (body != null && body.contains("\"message\":")) {
-                    int idx = body.indexOf("\"message\":");
-                    errorDetail = body.substring(idx).replaceAll("[\"{}\\]\\[]", "").replace("message:", "").trim();
-                }
-                logger.warn("Fast2SMS rejected OTP request: {}", errorDetail);
-                return new Fast2SmsResult(false, errorDetail);
             }
+
+            // Attempt Quick SMS route as fallback (does not require DLT templates)
+            try {
+                String quickMsg = "Your Panchayagnam verification code is " + otp + ". Do not share it with anyone.";
+                String quickUrlStr = "https://www.fast2sms.com/dev/bulkV2?authorization=" +
+                        URLEncoder.encode(apiKey, StandardCharsets.UTF_8) +
+                        "&route=q&message=" +
+                        URLEncoder.encode(quickMsg, StandardCharsets.UTF_8) +
+                        "&language=english&flash=0&numbers=" +
+                        URLEncoder.encode(tenDigitNumber, StandardCharsets.UTF_8);
+
+                HttpRequest quickReq = HttpRequest.newBuilder()
+                        .uri(URI.create(quickUrlStr))
+                        .timeout(Duration.ofSeconds(10))
+                        .header("cache-control", "no-cache")
+                        .GET()
+                        .build();
+
+                HttpResponse<String> quickResp = client.send(quickReq, HttpResponse.BodyHandlers.ofString());
+                String qBody = quickResp.body();
+                logger.info("Fast2SMS Quick route response status: {}, body: {}", quickResp.statusCode(), qBody);
+                if (qBody != null && (qBody.contains("\"return\":true") || qBody.contains("\"return\": true"))) {
+                    return new Fast2SmsResult(true, "SMS delivered successfully via Fast2SMS Quick Route");
+                }
+            } catch (Exception qe) {
+                logger.warn("Quick route fallback error: {}", qe.getMessage());
+            }
+
+            String errorDetail = "Fast2SMS error";
+            if (body != null && body.contains("\"message\":")) {
+                int idx = body.indexOf("\"message\":");
+                errorDetail = body.substring(idx).replaceAll("[\"{}\\]\\[]", "").replace("message:", "").trim();
+            }
+            logger.warn("Fast2SMS rejected OTP request: {}", errorDetail);
+            return new Fast2SmsResult(false, errorDetail);
         } catch (Exception e) {
             logger.error("Exception while sending SMS via Fast2SMS: {}", e.getMessage(), e);
             return new Fast2SmsResult(false, e.getMessage());
