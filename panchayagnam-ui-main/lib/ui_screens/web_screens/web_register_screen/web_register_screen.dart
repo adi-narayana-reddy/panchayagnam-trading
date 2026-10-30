@@ -374,10 +374,12 @@ class _RightPanelState extends State<_RightPanel> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
-                'OTP sent to +91 ${_phoneCtrl.text.trim()} via SMS. Please check your mobile phone.',
+                state.otp != null && state.otp!.isNotEmpty
+                    ? state.message
+                    : 'OTP sent to +91 ${_phoneCtrl.text.trim()} via SMS. Please check your mobile phone.',
               ),
               backgroundColor: const Color(0xFF7C3AED),
-              duration: const Duration(seconds: 6),
+              duration: Duration(seconds: state.otp != null && state.otp!.isNotEmpty ? 10 : 6),
               behavior: SnackBarBehavior.floating,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(10),

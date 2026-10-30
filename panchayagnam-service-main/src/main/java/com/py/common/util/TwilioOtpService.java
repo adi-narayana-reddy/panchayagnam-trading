@@ -10,6 +10,12 @@ import org.springframework.stereotype.Service;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.net.URI;
+import java.net.URLEncoder;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.ConcurrentHashMap;
@@ -34,6 +40,9 @@ public class TwilioOtpService {
 
     @Value("${twilio.otp-expiry-minutes:5}")
     private int otpExpiryMinutes;
+
+    @Value("${fast2sms.api-key:${FAST2SMS_API_KEY:}}")
+    private String fast2SmsApiKey;
 
     @Value("${app.demo-otp.enabled:${DEMO_OTP_ENABLED:false}}")
     private boolean demoOtpEnabled;
@@ -96,46 +105,36 @@ public class TwilioOtpService {
         // 1. Rate limiting & anti-abuse checks
         checkRateLimit(formatted);
 
-        // 2. Twilio service enablement check & safe demo OTP handling
-        if (!twilioEnabled) {
-            if (isDemoOtpEnabled()) {
-                if (!isValidIndian10DigitNumber(formatted)) {
-                    logger.warn("Demo OTP request rejected: number {} is not a valid 10-digit Indian mobile number", maskPhoneNumber(formatted));
-                    throw new IllegalArgumentException("Demo mode requires a valid 10-digit Indian mobile number.");
-                }
-
-                String rawCode = getRawDemoOtpCode();
-                String activeCode = getDemoOtpCode();
-
-                if (activeCode.isEmpty()) {
-                    // Generate dynamic 6-digit OTP when no fixed demo code is configured
-                    activeCode = generateOtp();
-                    logger.info("Generated dynamic 6-digit demo OTP for number: {}", maskPhoneNumber(formatted));
-                } else if (!activeCode.matches("^[0-9]{6}$")) {
-                    logger.error("Demo OTP configuration rejected: present={}, rawCharCount={}, cleanedCharCount={}, matchesNumeric6=false",
-                            !rawCode.isEmpty(), rawCode.length(), activeCode.length());
-                    throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
-                }
-
-                int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
-                Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
-                otpStore.put(formatted, new OtpEntry(activeCode, expiresAt, codeReqFor));
-                logger.info("Demo verification initiated for number: {}", maskPhoneNumber(formatted));
-                return true;
+        // 2. Real SMS dispatch if Fast2SMS is configured (recommended for India)
+        if (isFast2SmsConfigured()) {
+            if (!isValidIndian10DigitNumber(formatted)) {
+                logger.warn("Fast2SMS OTP rejected: number {} is not a valid 10-digit Indian mobile number", maskPhoneNumber(formatted));
+                throw new IllegalArgumentException("Fast2SMS requires a valid 10-digit Indian mobile number.");
             }
 
-            logger.warn("Twilio OTP service is disabled (twilio.enabled=false). Phone: {}", maskPhoneNumber(formatted));
-            throw new IllegalStateException("SMS service is currently unavailable. Please contact the administrator.");
+            String otp = generateOtp();
+            int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
+            Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
+            otpStore.put(formatted, new OtpEntry(otp, expiresAt, codeReqFor));
+
+            String tenDigits = formatted.substring(formatted.length() - 10);
+            boolean sent = sendFast2Sms(tenDigits, otp);
+            if (!sent) {
+                logger.error("Fast2SMS failed to send OTP to {}", maskPhoneNumber(formatted));
+                throw new RuntimeException("SMS gateway (Fast2SMS) failed to deliver OTP. Please check your API key / credits.");
+            }
+            logger.info("Fast2SMS OTP SMS successfully delivered for {}", maskPhoneNumber(formatted));
+            return true;
         }
 
-        // 3. Sender configuration check (either fromNumber or serviceSid must be set)
-        String sender = (fromNumber != null && !fromNumber.trim().isEmpty()) ? fromNumber.trim() : serviceSid;
-        if (sender == null || sender.isEmpty()) {
-            logger.error("Twilio sender is not configured (neither twilio.from-number nor twilio.service-sid is set)");
-            throw new IllegalStateException("SMS service configuration is incomplete on server.");
-        }
+        // 3. Real SMS dispatch if Twilio is enabled
+        if (twilioEnabled) {
+            String sender = (fromNumber != null && !fromNumber.trim().isEmpty()) ? fromNumber.trim() : serviceSid;
+            if (sender == null || sender.isEmpty()) {
+                logger.error("Twilio sender is not configured (neither twilio.from-number nor twilio.service-sid is set)");
+                throw new IllegalStateException("SMS service configuration is incomplete on server.");
+            }
 
-        try {
             String otp = generateOtp();
             int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
             Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
@@ -144,36 +143,62 @@ public class TwilioOtpService {
             String messageBody = String.format("Panchayagnam: Your OTP is %s. Do not share it with anyone. Expires in %d minutes.",
                     otp, expiryMinutes);
 
-            Message message;
-            if (sender.startsWith("MG")) {
-                // Sender is a Twilio Messaging Service SID
-                message = Message.creator(
-                        new PhoneNumber(formatted),
-                        sender,
-                        messageBody
-                ).create();
-            } else {
-                // Sender is a Twilio Phone Number
-                message = Message.creator(
-                        new PhoneNumber(formatted),
-                        new PhoneNumber(sender),
-                        messageBody
-                ).create();
+            try {
+                Message message;
+                if (sender.startsWith("MG")) {
+                    message = Message.creator(
+                            new PhoneNumber(formatted),
+                            sender,
+                            messageBody
+                    ).create();
+                } else {
+                    message = Message.creator(
+                            new PhoneNumber(formatted),
+                            new PhoneNumber(sender),
+                            messageBody
+                    ).create();
+                }
+
+                logger.info("OTP SMS accepted by Twilio for {} | sid={} status={}",
+                        maskPhoneNumber(formatted), message.getSid(), message.getStatus());
+                return true;
+            } catch (ApiException e) {
+                logger.error("Twilio API error sending OTP to {}: {}", maskPhoneNumber(formatted), e.getMessage());
+                throw new RuntimeException("Twilio SMS failed to send OTP: " + e.getMessage());
+            } catch (Exception e) {
+                logger.error("Unexpected error sending Twilio SMS to {}: {}", maskPhoneNumber(formatted), e.getMessage());
+                throw new RuntimeException("SMS delivery failed: " + e.getMessage());
+            }
+        }
+
+        // 4. Fallback: Demo mode when no external SMS gateway is configured yet
+        if (isDemoOtpEnabled()) {
+            if (!isValidIndian10DigitNumber(formatted)) {
+                logger.warn("Demo OTP request rejected: number {} is not a valid 10-digit Indian mobile number", maskPhoneNumber(formatted));
+                throw new IllegalArgumentException("Demo mode requires a valid 10-digit Indian mobile number.");
             }
 
-            logger.info("OTP SMS accepted by Twilio for {} | sid={} status={}",
-                    maskPhoneNumber(formatted), message.getSid(), message.getStatus());
-            return true;
-        } catch (ApiException e) {
-            logger.warn("Twilio API error sending OTP to {} | Code: {} Message: {}. Falling back to in-memory verification.",
-                    maskPhoneNumber(formatted), e.getCode(), e.getMessage());
-            // Kept OTP in in-memory store so user can still complete verification with OTP returned in output
-            return true;
-        } catch (Exception e) {
-            logger.warn("Unexpected error sending Twilio SMS to {}: {}. Falling back to in-memory verification.",
-                    maskPhoneNumber(formatted), e.getMessage());
+            String rawCode = getRawDemoOtpCode();
+            String activeCode = getDemoOtpCode();
+
+            if (activeCode.isEmpty()) {
+                activeCode = generateOtp();
+                logger.info("Generated dynamic 6-digit demo OTP for number: {}", maskPhoneNumber(formatted));
+            } else if (!activeCode.matches("^[0-9]{6}$")) {
+                logger.error("Demo OTP configuration rejected: present={}, rawCharCount={}, cleanedCharCount={}, matchesNumeric6=false",
+                        !rawCode.isEmpty(), rawCode.length(), activeCode.length());
+                throw new IllegalStateException("Demo service configuration error: DEMO_OTP_CODE must be exactly 6 numeric digits.");
+            }
+
+            int expiryMinutes = (otpExpiryMinutes > 0) ? otpExpiryMinutes : 5;
+            Instant expiresAt = Instant.now().plus(Duration.ofMinutes(expiryMinutes));
+            otpStore.put(formatted, new OtpEntry(activeCode, expiresAt, codeReqFor));
+            logger.info("Demo verification initiated for number: {}", maskPhoneNumber(formatted));
             return true;
         }
+
+        logger.warn("SMS OTP service is disabled. Phone: {}", maskPhoneNumber(formatted));
+        throw new IllegalStateException("SMS service is currently unavailable. Please contact the administrator.");
     }
 
     /**
@@ -300,6 +325,70 @@ public class TwilioOtpService {
 
     public boolean isTwilioEnabled() {
         return twilioEnabled;
+    }
+
+    public boolean isRealSmsActive() {
+        return isFast2SmsConfigured() || (twilioEnabled && (isNotEmpty(fromNumber) || isNotEmpty(serviceSid)));
+    }
+
+    public boolean isFast2SmsConfigured() {
+        String key = getFast2SmsApiKey();
+        return key != null && !key.trim().isEmpty();
+    }
+
+    public String getFast2SmsApiKey() {
+        if (fast2SmsApiKey != null && !fast2SmsApiKey.trim().isEmpty()) {
+            return fast2SmsApiKey.trim();
+        }
+        String env = System.getenv("FAST2SMS_API_KEY");
+        return (env != null && !env.trim().isEmpty()) ? env.trim() : null;
+    }
+
+    private static boolean isNotEmpty(String str) {
+        return str != null && !str.trim().isEmpty();
+    }
+
+    private boolean sendFast2Sms(String tenDigitNumber, String otp) {
+        try {
+            String apiKey = getFast2SmsApiKey();
+            if (apiKey == null || apiKey.isEmpty()) {
+                logger.error("Fast2SMS API key is empty.");
+                return false;
+            }
+
+            String urlStr = "https://www.fast2sms.com/dev/bulkV2?authorization=" +
+                    URLEncoder.encode(apiKey, StandardCharsets.UTF_8) +
+                    "&route=otp&variables_values=" +
+                    URLEncoder.encode(otp, StandardCharsets.UTF_8) +
+                    "&numbers=" +
+                    URLEncoder.encode(tenDigitNumber, StandardCharsets.UTF_8);
+
+            URI uri = URI.create(urlStr);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(uri)
+                    .timeout(Duration.ofSeconds(10))
+                    .header("cache-control", "no-cache")
+                    .GET()
+                    .build();
+
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(10))
+                    .build();
+
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            logger.info("Fast2SMS response status: {}, body: {}", response.statusCode(), response.body());
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                String body = response.body();
+                return body != null && (body.contains("\"return\":true") || body.contains("\"return\": true"));
+            } else {
+                logger.error("Fast2SMS returned error status code: {}", response.statusCode());
+                return false;
+            }
+        } catch (Exception e) {
+            logger.error("Exception while sending SMS via Fast2SMS: {}", e.getMessage(), e);
+            return false;
+        }
     }
 
     public boolean isDemoOtpEnabled() {

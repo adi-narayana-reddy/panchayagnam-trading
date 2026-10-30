@@ -47,6 +47,9 @@ twilio:
   from-number: ${TWILIO_FROM_NUMBER:+1234567890}
   enabled: ${TWILIO_ENABLED:false}
 
+fast2sms:
+  api-key: ${FAST2SMS_API_KEY:}
+
 app:
   mail:
     from: ${APP_MAIL_FROM:customersupport@panchayagnam.com}
