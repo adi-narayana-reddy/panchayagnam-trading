@@ -86,6 +86,8 @@ public class TwilioOtpService {
 
     private final ConcurrentHashMap<String, OtpEntry> otpStore = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RateLimitEntry> rateLimitStore = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, Boolean> smsDeliveredDirectly = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> smsGatewayStatusMessage = new ConcurrentHashMap<>();
 
     // -------------------- Messaging API + custom message methods --------------------
     /**
@@ -118,13 +120,22 @@ public class TwilioOtpService {
             otpStore.put(formatted, new OtpEntry(otp, expiresAt, codeReqFor));
 
             String tenDigits = formatted.substring(formatted.length() - 10);
-            boolean sent = sendFast2Sms(tenDigits, otp);
-            if (!sent) {
-                logger.error("Fast2SMS failed to send OTP to {}", maskPhoneNumber(formatted));
-                throw new RuntimeException("SMS gateway (Fast2SMS) failed to deliver OTP. Please check your API key / credits.");
+            Fast2SmsResult result = sendFast2Sms(tenDigits, otp);
+            if (result.isSuccess()) {
+                smsDeliveredDirectly.put(formatted, true);
+                smsGatewayStatusMessage.remove(formatted);
+                logger.info("Fast2SMS OTP SMS successfully delivered for {}", maskPhoneNumber(formatted));
+                return true;
+            } else {
+                logger.warn("Fast2SMS failed to deliver SMS to {}: {}", maskPhoneNumber(formatted), result.getMessage());
+                smsDeliveredDirectly.put(formatted, false);
+                smsGatewayStatusMessage.put(formatted, result.getMessage());
+                if (!isDemoOtpEnabled()) {
+                    throw new RuntimeException("SMS gateway (Fast2SMS) failed: " + result.getMessage());
+                }
+                logger.info("Falling back to demo OTP mode for {} due to Fast2SMS notice: {}", maskPhoneNumber(formatted), result.getMessage());
+                return true;
             }
-            logger.info("Fast2SMS OTP SMS successfully delivered for {}", maskPhoneNumber(formatted));
-            return true;
         }
 
         // 3. Real SMS dispatch if Twilio is enabled
@@ -348,12 +359,40 @@ public class TwilioOtpService {
         return str != null && !str.trim().isEmpty();
     }
 
-    private boolean sendFast2Sms(String tenDigitNumber, String otp) {
+    public boolean wasSmsDeliveredDirectly(String phoneNumber) {
+        String formatted = formatPhoneNumber(phoneNumber);
+        return formatted != null && Boolean.TRUE.equals(smsDeliveredDirectly.get(formatted));
+    }
+
+    public String getSmsGatewayStatusMessage(String phoneNumber) {
+        String formatted = formatPhoneNumber(phoneNumber);
+        return formatted != null ? smsGatewayStatusMessage.get(formatted) : null;
+    }
+
+    private static class Fast2SmsResult {
+        private final boolean success;
+        private final String message;
+
+        Fast2SmsResult(boolean success, String message) {
+            this.success = success;
+            this.message = message;
+        }
+
+        public boolean isSuccess() {
+            return success;
+        }
+
+        public String getMessage() {
+            return message;
+        }
+    }
+
+    private Fast2SmsResult sendFast2Sms(String tenDigitNumber, String otp) {
         try {
             String apiKey = getFast2SmsApiKey();
             if (apiKey == null || apiKey.isEmpty()) {
                 logger.error("Fast2SMS API key is empty.");
-                return false;
+                return new Fast2SmsResult(false, "Fast2SMS API key is empty");
             }
 
             String urlStr = "https://www.fast2sms.com/dev/bulkV2?authorization=" +
@@ -376,18 +415,23 @@ public class TwilioOtpService {
                     .build();
 
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
-            logger.info("Fast2SMS response status: {}, body: {}", response.statusCode(), response.body());
+            String body = response.body();
+            logger.info("Fast2SMS response status: {}, body: {}", response.statusCode(), body);
 
-            if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                String body = response.body();
-                return body != null && (body.contains("\"return\":true") || body.contains("\"return\": true"));
+            if (body != null && (body.contains("\"return\":true") || body.contains("\"return\": true"))) {
+                return new Fast2SmsResult(true, "SMS delivered successfully");
             } else {
-                logger.error("Fast2SMS returned error status code: {}", response.statusCode());
-                return false;
+                String errorDetail = "Fast2SMS error";
+                if (body != null && body.contains("\"message\":")) {
+                    int idx = body.indexOf("\"message\":");
+                    errorDetail = body.substring(idx).replaceAll("[\"{}\\]\\[]", "").replace("message:", "").trim();
+                }
+                logger.warn("Fast2SMS rejected OTP request: {}", errorDetail);
+                return new Fast2SmsResult(false, errorDetail);
             }
         } catch (Exception e) {
             logger.error("Exception while sending SMS via Fast2SMS: {}", e.getMessage(), e);
-            return false;
+            return new Fast2SmsResult(false, e.getMessage());
         }
     }
 

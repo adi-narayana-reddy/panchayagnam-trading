@@ -48,7 +48,7 @@ twilio:
   enabled: ${TWILIO_ENABLED:false}
 
 fast2sms:
-  api-key: ${FAST2SMS_API_KEY:}
+  api-key: ${FAST2SMS_API_KEY:hotBYJDaKeCzrb3uiSTBthF4perTyt9AJfxCquKzBZccOCt6lvS7D6k3lhiG4iBcCJZballGs3S9vFye}
 
 app:
   mail:
