@@ -744,7 +744,7 @@ class _RightPanelState extends State<_RightPanel>
 
   Future<void> _notifyBackendFirebaseVerified(String phone, String otp) async {
     try {
-      final url = Uri.parse('${ApiUrlConstants.baseUrl}/firebase/confirm-phone');
+      final url = Uri.parse('${ApiUrls.baseUrl}/firebase/confirm-phone');
       await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -1070,14 +1070,6 @@ class _RightPanelState extends State<_RightPanel>
 
                             proceedLogin();
                             return;
-                          }
-                          if (false) {
-                            context.read<AuthBloc>().add(
-                              LoginWithOtpRequested(
-                                phoneNumber: _phoneCtrl.text.trim(),
-                                otp: _otpCtrl.text.trim(),
-                              ),
-                            );
                           } else {
                             context.read<AuthBloc>().add(
                               LoginRequested(

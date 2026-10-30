@@ -362,7 +362,7 @@ class _RightPanelState extends State<_RightPanel> {
 
   Future<void> _notifyBackendFirebaseVerified(String phone, String otp) async {
     try {
-      final url = Uri.parse('${ApiUrlConstants.baseUrl}/firebase/confirm-phone');
+      final url = Uri.parse('${ApiUrls.baseUrl}/firebase/confirm-phone');
       await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
@@ -633,21 +633,7 @@ class _RightPanelState extends State<_RightPanel> {
                               proceedWithRegister();
                               return;
                             }
-                            if (false) {
-                              // Mark register as the active loading action
-                              setState(
-                                () => _loadingAction = _LoadingAction.register,
-                              );
-                              context.read<AuthBloc>().add(
-                                RegisterRequested(
-                                  fullName: _nameCtrl.text.trim(),
-                                  email: _emailCtrl.text.trim(),
-                                  phoneNumber: _phoneCtrl.text.trim(),
-                                  mpin: _mpinCtrl.text.trim(),
-                                  otp: _otpCtrl.text.trim(),
-                                ),
-                              );
-                            }
+
                           },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.sidebarBg,
