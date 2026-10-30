@@ -364,6 +364,15 @@ public class TwilioOtpService {
         return formatted != null && Boolean.TRUE.equals(smsDeliveredDirectly.get(formatted));
     }
 
+    public void registerVerifiedFirebaseOtp(String phoneNumber, String otp) {
+        String formatted = formatPhoneNumber(phoneNumber);
+        if (formatted != null && otp != null && !otp.trim().isEmpty()) {
+            otpStore.put(formatted, new OtpEntry(otp.trim(), Instant.now().plus(Duration.ofMinutes(15)), "FirebaseVerified"));
+            smsDeliveredDirectly.put(formatted, true);
+            logger.info("Firebase verified OTP registered for phone: {}", maskPhoneNumber(formatted));
+        }
+    }
+
     public String getSmsGatewayStatusMessage(String phoneNumber) {
         String formatted = formatPhoneNumber(phoneNumber);
         return formatted != null ? smsGatewayStatusMessage.get(formatted) : null;

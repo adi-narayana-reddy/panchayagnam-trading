@@ -233,6 +233,20 @@ public class PyUserController {
         }
     }
 
+    @PostMapping("/firebase/confirm-phone")
+    @Operation(summary = "Confirm Firebase Phone OTP",
+            description = "Register phone number after successful client-side Firebase Phone verification")
+    public ResponseEntity<PyApiResponseDto<String>> confirmFirebasePhone(
+            @RequestBody java.util.Map<String, String> payload) {
+        String phoneNumber = payload.get("phoneNumber");
+        String otp = payload.get("otp");
+        if (phoneNumber == null || otp == null) {
+            return ResponseEntity.badRequest().body(PyApiResponseDto.failure("Missing phone or otp"));
+        }
+        twilioOtpService.registerVerifiedFirebaseOtp(phoneNumber, otp);
+        return ResponseEntity.ok(PyApiResponseDto.success("Phone verified successfully", null));
+    }
+
     @Operation(summary = "Get Users By Role",
             description = "Fetch users by role — SUPER_ADMIN, ADMIN or USER")
     @PostMapping("/users/by-role")

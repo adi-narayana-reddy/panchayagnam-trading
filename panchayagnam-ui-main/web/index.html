@@ -34,8 +34,87 @@
 
   <title>PANCHAYAGNAM</title>
   <link rel="manifest" href="manifest.json">
+
+  <!-- Firebase App & Auth SDKs for Google Free SMS OTP -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyA5EkAMMgOaVgIha9reGSL9VH0I59miN1E",
+      authDomain: "panchayagnam.firebaseapp.com",
+      projectId: "panchayagnam",
+      storageBucket: "panchayagnam.firebasestorage.app",
+      messagingSenderId: "312168695141",
+      appId: "1:312168695141:web:fb520690d93b57a5b78d8c",
+      measurementId: "G-0HFQT3MMLY"
+    };
+
+    if (typeof firebase !== 'undefined') {
+      try {
+        firebase.initializeApp(firebaseConfig);
+        console.log('[Firebase] Initialized with project: panchayagnam');
+      } catch (e) {
+        console.warn('[Firebase] Init notice:', e);
+      }
+    }
+
+    window.sendFirebaseOtp = function(phoneNumber, onSuccess, onError) {
+      try {
+        var clean = phoneNumber.replace(/[^0-9]/g, '');
+        if (clean.length === 10) {
+          clean = '+91' + clean;
+        } else if (!clean.startsWith('+')) {
+          clean = '+' + clean;
+        }
+
+        if (!window.recaptchaVerifier) {
+          window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+            'size': 'invisible'
+          });
+        }
+
+        firebase.auth().signInWithPhoneNumber(clean, window.recaptchaVerifier)
+          .then(function(confirmationResult) {
+            window.confirmationResult = confirmationResult;
+            console.log('[Firebase] SMS successfully dispatched to ' + clean);
+            if (onSuccess) onSuccess('SMS dispatched to ' + clean);
+          })
+          .catch(function(error) {
+            console.error('[Firebase] SMS error:', error);
+            if (window.recaptchaVerifier) {
+              try {
+                window.recaptchaVerifier.render().then(function(widgetId) {
+                  grecaptcha.reset(widgetId);
+                });
+              } catch(e) {}
+            }
+            if (onError) onError(error.message || 'SMS delivery error');
+          });
+      } catch (err) {
+        console.error('[Firebase] sendFirebaseOtp exception:', err);
+        if (onError) onError(err.message || 'Error initializing SMS');
+      }
+    };
+
+    window.verifyFirebaseOtp = function(code, onSuccess, onError) {
+      if (!window.confirmationResult) {
+        if (onError) onError('No active OTP request found');
+        return;
+      }
+      window.confirmationResult.confirm(code)
+        .then(function(result) {
+          console.log('[Firebase] OTP verified successfully for: ' + result.user.phoneNumber);
+          if (onSuccess) onSuccess(result.user.phoneNumber);
+        })
+        .catch(function(error) {
+          console.error('[Firebase] OTP verification failed:', error);
+          if (onError) onError(error.message || 'Invalid OTP code entered');
+        });
+    };
+  </script>
 </head>
 <body>
+  <div id="recaptcha-container"></div>
   <script>
     (function () {
       var appUrl = new URL(document.baseURI);

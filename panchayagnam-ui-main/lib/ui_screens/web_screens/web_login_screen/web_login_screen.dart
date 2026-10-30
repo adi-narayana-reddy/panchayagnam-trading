@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:js' as js;
+import 'package:http/http.dart' as http;
+import '../../../constants/api_url_constants.dart';
 import 'dart:math' as math;
 import 'package:easy_trade_web/constants/colors.dart';
 import 'package:easy_trade_web/ui_screens/web_screens/web_ip_screen/home_screen.dart';
@@ -738,6 +742,19 @@ class _RightPanelState extends State<_RightPanel>
     return '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
   }
 
+  Future<void> _notifyBackendFirebaseVerified(String phone, String otp) async {
+    try {
+      final url = Uri.parse('${ApiUrlConstants.baseUrl}/firebase/confirm-phone');
+      await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phoneNumber': phone, 'otp': otp}),
+      );
+    } catch (e) {
+      print('Firebase backend notify notice: $e');
+    }
+  }
+
   void _sendLoginOtp() {
     final phone = _phoneCtrl.text.trim();
     if (phone.length != 10 || !RegExp(r'^[0-9]+$').hasMatch(phone)) {
@@ -751,6 +768,22 @@ class _RightPanelState extends State<_RightPanel>
       return;
     }
     setState(() => _isSendingOtp = true);
+
+    try {
+      if (js.context.hasProperty('sendFirebaseOtp')) {
+        js.context.callMethod('sendFirebaseOtp', [
+          phone,
+          js.allowInterop((msg) {
+            print('[Firebase] Login SMS dispatched: $msg');
+          }),
+          js.allowInterop((err) {
+            print('[Firebase] Login SMS notice: $err');
+          }),
+        ]);
+      }
+    } catch (e) {
+      print('Firebase invocation note: $e');
+    }
     context.read<AuthBloc>().add(
       SendOtpRequested(
         phoneNumber: phone,
@@ -1006,6 +1039,39 @@ class _RightPanelState extends State<_RightPanel>
                       onPressed: () {
                         if (_formKey.currentState!.validate()) {
                           if (_isOtpLogin) {
+                            final phone = _phoneCtrl.text.trim();
+                            final otp = _otpCtrl.text.trim();
+
+                            void proceedLogin() {
+                              context.read<AuthBloc>().add(
+                                LoginWithOtpRequested(
+                                  phoneNumber: phone,
+                                  otp: otp,
+                                ),
+                              );
+                            }
+
+                            try {
+                              if (js.context.hasProperty('verifyFirebaseOtp')) {
+                                js.context.callMethod('verifyFirebaseOtp', [
+                                  otp,
+                                  js.allowInterop((verifiedPhone) {
+                                    _notifyBackendFirebaseVerified(phone, otp).then((_) {
+                                      proceedLogin();
+                                    });
+                                  }),
+                                  js.allowInterop((error) {
+                                    proceedLogin();
+                                  }),
+                                ]);
+                                return;
+                              }
+                            } catch (_) {}
+
+                            proceedLogin();
+                            return;
+                          }
+                          if (false) {
                             context.read<AuthBloc>().add(
                               LoginWithOtpRequested(
                                 phoneNumber: _phoneCtrl.text.trim(),

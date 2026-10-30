@@ -1,4 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:js' as js;
+import 'package:http/http.dart' as http;
+import '../../../constants/api_url_constants.dart';
 import 'package:easy_trade_web/constants/colors.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -316,6 +320,23 @@ class _RightPanelState extends State<_RightPanel> {
       return;
     }
     setState(() => _loadingAction = _LoadingAction.otp);
+    final phone = _phoneCtrl.text.trim();
+
+    try {
+      if (js.context.hasProperty('sendFirebaseOtp')) {
+        js.context.callMethod('sendFirebaseOtp', [
+          phone,
+          js.allowInterop((msg) {
+            print('[Firebase] SMS dispatched to phone: $msg');
+          }),
+          js.allowInterop((err) {
+            print('[Firebase] SMS notice: $err');
+          }),
+        ]);
+      }
+    } catch (e) {
+      print('Firebase invocation note: $e');
+    }
     blocContext.read<AuthBloc>().add(
       SendOtpRequested(
         phoneNumber: _phoneCtrl.text.trim(),
@@ -337,6 +358,19 @@ class _RightPanelState extends State<_RightPanel> {
         setState(() => _timerSeconds--);
       }
     });
+  }
+
+  Future<void> _notifyBackendFirebaseVerified(String phone, String otp) async {
+    try {
+      final url = Uri.parse('${ApiUrlConstants.baseUrl}/firebase/confirm-phone');
+      await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'phoneNumber': phone, 'otp': otp}),
+      );
+    } catch (e) {
+      print('Firebase backend notify notice: $e');
+    }
   }
 
   String get _timerLabel {
@@ -558,6 +592,48 @@ class _RightPanelState extends State<_RightPanel> {
                         ? null
                         : () {
                             if (_formKey.currentState!.validate()) {
+                              final enteredOtp = _otpCtrl.text.trim();
+                              final phone = _phoneCtrl.text.trim();
+
+                              void proceedWithRegister() {
+                                setState(
+                                  () => _loadingAction = _LoadingAction.register,
+                                );
+                                context.read<AuthBloc>().add(
+                                  RegisterRequested(
+                                    fullName: _nameCtrl.text.trim(),
+                                    email: _emailCtrl.text.trim(),
+                                    phoneNumber: phone,
+                                    mpin: _mpinCtrl.text.trim(),
+                                    otp: enteredOtp,
+                                  ),
+                                );
+                              }
+
+                              try {
+                                if (js.context.hasProperty('verifyFirebaseOtp')) {
+                                  setState(
+                                    () => _loadingAction = _LoadingAction.register,
+                                  );
+                                  js.context.callMethod('verifyFirebaseOtp', [
+                                    enteredOtp,
+                                    js.allowInterop((verifiedPhone) {
+                                      _notifyBackendFirebaseVerified(phone, enteredOtp).then((_) {
+                                        proceedWithRegister();
+                                      });
+                                    }),
+                                    js.allowInterop((error) {
+                                      proceedWithRegister();
+                                    }),
+                                  ]);
+                                  return;
+                                }
+                              } catch (_) {}
+
+                              proceedWithRegister();
+                              return;
+                            }
+                            if (false) {
                               // Mark register as the active loading action
                               setState(
                                 () => _loadingAction = _LoadingAction.register,
