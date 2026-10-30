@@ -275,7 +275,7 @@ class _RightPanelState extends State<_RightPanel> {
   bool _emailValid = false;
   bool _phoneValid = false;
 
-  bool get _canSendOtp => _nameValid && _emailValid && _phoneValid;
+  bool get _canSendOtp => _phoneValid;
 
   @override
   void initState() {
@@ -288,11 +288,11 @@ class _RightPanelState extends State<_RightPanel> {
   void _onFieldsChanged() {
     final name = _nameCtrl.text.trim();
     final email = _emailCtrl.text.trim();
-    final phone = _phoneCtrl.text;
+    final phone = _phoneCtrl.text.trim();
 
     final nameOk = name.length >= 3 && RegExp(r'^[a-zA-Z ]+$').hasMatch(name);
     final emailOk = RegExp(r'^[^@]+@[^@]+\.[^@]+').hasMatch(email);
-    final phoneOk = phone.length == 10;
+    final phoneOk = phone.length == 10 && RegExp(r'^[0-9]+$').hasMatch(phone);
 
     if (nameOk != _nameValid ||
         emailOk != _emailValid ||
@@ -306,13 +306,22 @@ class _RightPanelState extends State<_RightPanel> {
   }
 
   void _sendOtp(BuildContext blocContext) {
+    if (_phoneCtrl.text.trim().length != 10) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid 10-digit phone number first.'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
     setState(() => _loadingAction = _LoadingAction.otp);
     blocContext.read<AuthBloc>().add(
       SendOtpRequested(
         phoneNumber: _phoneCtrl.text.trim(),
         codeReqFor: 'Registration',
       ),
-    );///
+    );
   }
 
   void _startTimer() {
@@ -363,6 +372,78 @@ class _RightPanelState extends State<_RightPanel> {
             }
           });
           _startTimer();
+
+          // Show prominent alert dialog with the OTP
+          if (state.otp != null && state.otp!.isNotEmpty) {
+            showDialog(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                title: const Row(
+                  children: [
+                    Icon(Icons.mark_email_read_outlined, color: Color(0xFF7C3AED), size: 28),
+                    SizedBox(width: 10),
+                    Text(
+                      'Verification OTP',
+                      style: TextStyle(fontWeight: FontWeight.w700, fontSize: 18),
+                    ),
+                  ],
+                ),
+                content: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Your 6-digit verification code is:',
+                      style: TextStyle(fontSize: 14, color: Color(0xFF4B5563)),
+                    ),
+                    const SizedBox(height: 14),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFF3E8FF),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: const Color(0xFFC084FC)),
+                      ),
+                      child: Center(
+                        child: Text(
+                          state.otp!,
+                          style: const TextStyle(
+                            fontSize: 28,
+                            fontWeight: FontWeight.w900,
+                            letterSpacing: 6,
+                            color: Color(0xFF6B21A8),
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'This code has been automatically filled into the OTP box.',
+                      style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                    ),
+                  ],
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text(
+                      'Continue',
+                      style: TextStyle(
+                        color: Color(0xFF7C3AED),
+                        fontWeight: FontWeight.w700,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }
+
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: Text(
