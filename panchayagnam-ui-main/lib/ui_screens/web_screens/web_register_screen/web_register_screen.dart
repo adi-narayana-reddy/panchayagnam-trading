@@ -328,9 +328,24 @@ class _RightPanelState extends State<_RightPanel> {
           phone,
           js.allowInterop((msg) {
             print('[Firebase] SMS dispatched to phone: $msg');
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('SMS OTP dispatched to your mobile phone! Please check your SMS inbox.'),
+                backgroundColor: Colors.green,
+              ),
+            );
           }),
           js.allowInterop((err) {
             print('[Firebase] SMS notice: $err');
+            if (err.toString().contains('unauthorized-domain')) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(
+                  content: Text('Firebase Domain Notice: Please add adi-narayana-reddy.github.io to Authorized domains in Firebase Console -> Authentication -> Settings.'),
+                  backgroundColor: Colors.red,
+                  duration: Duration(seconds: 8),
+                ),
+              );
+            }
           }),
         ]);
       }
@@ -362,7 +377,7 @@ class _RightPanelState extends State<_RightPanel> {
 
   Future<void> _notifyBackendFirebaseVerified(String phone, String otp) async {
     try {
-      final url = Uri.parse('${ApiUrls.baseUrl}/firebase/confirm-phone');
+      final url = Uri.parse('${ApiUrls.baseUrl}/api/v1/pyauth/firebase/confirm-phone');
       await http.post(
         url,
         headers: {'Content-Type': 'application/json'},

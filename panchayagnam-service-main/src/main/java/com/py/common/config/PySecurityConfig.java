@@ -62,11 +62,7 @@ public class PySecurityConfig {
                 .authorizeHttpRequests(auth -> auth
                         // Public auth & verification endpoints
                         .requestMatchers(
-                                "/api/v1/pyauth/login",
-                                "/api/v1/pyauth/register",
-                                "/api/v1/pyauth/send-otp",
-                                "/api/v1/pyauth/demo-status",
-                                "/api/v1/pyauth/reset-mpin",
+                                "/api/v1/pyauth/**",
                                 "/profitmart/oauth/callback"
                         ).permitAll()
 
