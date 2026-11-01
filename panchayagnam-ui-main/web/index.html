@@ -67,11 +67,32 @@
           clean = '+' + clean;
         }
 
-        if (!window.recaptchaVerifier) {
-          window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
-            'size': 'invisible'
-          });
+        if (window.recaptchaVerifier) {
+          try {
+            window.recaptchaVerifier.clear();
+          } catch(e) {}
+          window.recaptchaVerifier = null;
         }
+
+        var container = document.getElementById('recaptcha-container');
+        if (!container) {
+          container = document.createElement('div');
+          container.id = 'recaptcha-container';
+          container.style.position = 'fixed';
+          container.style.zIndex = '999999999';
+          container.style.bottom = '0';
+          container.style.right = '0';
+          document.body.appendChild(container);
+        } else {
+          container.innerHTML = '';
+        }
+
+        window.recaptchaVerifier = new firebase.auth.RecaptchaVerifier('recaptcha-container', {
+          'size': 'invisible',
+          'callback': function(response) {
+            console.log('[Firebase] reCAPTCHA passed');
+          }
+        });
 
         firebase.auth().signInWithPhoneNumber(clean, window.recaptchaVerifier)
           .then(function(confirmationResult) {
@@ -81,14 +102,8 @@
           })
           .catch(function(error) {
             console.error('[Firebase] SMS error:', error);
-            if (window.recaptchaVerifier) {
-              try {
-                window.recaptchaVerifier.render().then(function(widgetId) {
-                  grecaptcha.reset(widgetId);
-                });
-              } catch(e) {}
-            }
-            if (onError) onError(error.message || 'SMS delivery error');
+            var msg = error.message || error.code || 'SMS delivery error';
+            if (onError) onError(msg);
           });
       } catch (err) {
         console.error('[Firebase] sendFirebaseOtp exception:', err);
@@ -129,7 +144,7 @@
   </script>
 </head>
 <body>
-  <div id="recaptcha-container"></div>
+  <div id="recaptcha-container" style="position: fixed; z-index: 999999999; bottom: 0; right: 0;"></div>
   <script>
     (function () {
       var appUrl = new URL(document.baseURI);

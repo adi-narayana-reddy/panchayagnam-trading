@@ -337,15 +337,19 @@ class _RightPanelState extends State<_RightPanel> {
           }),
           js.allowInterop((err) {
             print('[Firebase] SMS notice: $err');
-            if (err.toString().contains('unauthorized-domain')) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text('Firebase Domain Notice: Please add adi-narayana-reddy.github.io to Authorized domains in Firebase Console -> Authentication -> Settings.'),
-                  backgroundColor: Colors.red,
-                  duration: Duration(seconds: 8),
-                ),
-              );
+            String msg = err.toString();
+            if (msg.contains('unauthorized-domain')) {
+              msg = 'Firebase Notice: Domain adi-narayana-reddy.github.io is not authorized in Firebase Console.';
+            } else if (msg.contains('quota-exceeded')) {
+              msg = 'Daily SMS limit reached on Firebase Spark plan (10/day). Please enter the OTP displayed above.';
             }
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(msg),
+                backgroundColor: Colors.red,
+                duration: const Duration(seconds: 8),
+              ),
+            );
           }),
         ]);
       }
