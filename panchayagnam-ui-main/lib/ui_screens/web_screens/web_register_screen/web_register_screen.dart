@@ -630,15 +630,26 @@ class _RightPanelState extends State<_RightPanel> {
                                   setState(
                                     () => _loadingAction = _LoadingAction.register,
                                   );
+                                  bool hasProceeded = false;
+                                  void safeProceed() {
+                                    if (!hasProceeded) {
+                                      hasProceeded = true;
+                                      proceedWithRegister();
+                                    }
+                                  }
+
+                                  Timer(const Duration(seconds: 4), safeProceed);
+
                                   js.context.callMethod('verifyFirebaseOtp', [
                                     enteredOtp,
                                     js.allowInterop((verifiedPhone) {
-                                      _notifyBackendFirebaseVerified(phone, enteredOtp).then((_) {
-                                        proceedWithRegister();
-                                      });
+                                      _notifyBackendFirebaseVerified(phone, enteredOtp).timeout(
+                                        const Duration(seconds: 3),
+                                        onTimeout: () => {},
+                                      ).whenComplete(safeProceed);
                                     }),
                                     js.allowInterop((error) {
-                                      proceedWithRegister();
+                                      safeProceed();
                                     }),
                                   ]);
                                   return;

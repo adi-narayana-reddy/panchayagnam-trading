@@ -1068,15 +1068,26 @@ class _RightPanelState extends State<_RightPanel>
 
                             try {
                               if (js.context.hasProperty('verifyFirebaseOtp')) {
+                                bool hasProceeded = false;
+                                void safeProceedLogin() {
+                                  if (!hasProceeded) {
+                                    hasProceeded = true;
+                                    proceedLogin();
+                                  }
+                                }
+
+                                Timer(const Duration(seconds: 4), safeProceedLogin);
+
                                 js.context.callMethod('verifyFirebaseOtp', [
                                   otp,
                                   js.allowInterop((verifiedPhone) {
-                                    _notifyBackendFirebaseVerified(phone, otp).then((_) {
-                                      proceedLogin();
-                                    });
+                                    _notifyBackendFirebaseVerified(phone, otp).timeout(
+                                      const Duration(seconds: 3),
+                                      onTimeout: () => {},
+                                    ).whenComplete(safeProceedLogin);
                                   }),
                                   js.allowInterop((error) {
-                                    proceedLogin();
+                                    safeProceedLogin();
                                   }),
                                 ]);
                                 return;

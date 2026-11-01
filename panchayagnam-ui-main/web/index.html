@@ -101,12 +101,27 @@
         if (onError) onError('No active OTP request found');
         return;
       }
+      var resolved = false;
+      var timer = setTimeout(function() {
+        if (!resolved) {
+          resolved = true;
+          console.warn('[Firebase] verifyFirebaseOtp timed out after 3.5s; falling back');
+          if (onError) onError('Firebase verify timed out');
+        }
+      }, 3500);
+
       window.confirmationResult.confirm(code)
         .then(function(result) {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timer);
           console.log('[Firebase] OTP verified successfully for: ' + result.user.phoneNumber);
           if (onSuccess) onSuccess(result.user.phoneNumber);
         })
         .catch(function(error) {
+          if (resolved) return;
+          resolved = true;
+          clearTimeout(timer);
           console.error('[Firebase] OTP verification failed:', error);
           if (onError) onError(error.message || 'Invalid OTP code entered');
         });
